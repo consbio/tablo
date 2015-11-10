@@ -26,6 +26,7 @@ POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
 
 logger = logging.getLogger(__name__)
 
+
 class FeatureServiceResource(ModelResource):
     fullExtent = JSONField(attribute="full_extent")
     initialExtent = JSONField(attribute="initial_extent")

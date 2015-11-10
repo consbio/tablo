@@ -86,7 +86,7 @@ class Extent(object):
             self.ymin = extent["ymin"]
             self.xmax = extent["xmax"]
             self.ymax = extent["ymax"]
-            assert extent.has_key("spatialReference")
+            assert 'spatialReference' in extent
             self.spatial_reference = SpatialReference(extent["spatialReference"])
         elif isinstance(extent, (list, tuple)):  # WMS format, spatial reference parameter must be provided
             self._original_format = "list"

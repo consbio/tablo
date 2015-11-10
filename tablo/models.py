@@ -81,7 +81,7 @@ class FeatureService(models.Model):
         old_table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
         new_table_name = TABLE_NAME_PREFIX + dataset_id
 
-        with connections['feature-services'].cursor() as c:
+        with connections['tablo'].cursor() as c:
             c.execute('DROP TABLE IF EXISTS {new_table_name}'.format(
                 new_table_name=new_table_name
             ))
@@ -147,7 +147,7 @@ class FeatureServiceLayer(models.Model):
     @property
     def fields(self):
         fields = []
-        connection = connections['feature-services']
+        connection = connections['tablo']
         with connection.cursor() as c:
             c.execute('select * from {0} limit 1'.format(self.table))
             # c.description won't be populated without first running the query above
@@ -604,7 +604,7 @@ def determine_extent(table):
 
 
 def get_cursor():
-    return connections['feature-services'].cursor()
+    return connections['tablo'].cursor()
 
 
 class Column(object):
