@@ -8,18 +8,15 @@ from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
 from django.http import Http404
 
 from tastypie import fields
-from tastypie.authentication import MultiAuthentication, SessionAuthentication, Authentication
-from tastypie.authorization import Authorization
 from tastypie.constants import ALL
-from tastypie.http import HttpGone, HttpMultipleChoices, HttpBadRequest
+from tastypie.http import HttpMultipleChoices, HttpBadRequest
 from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 
-from clientlib.geometry import Extent
-from databasin.feature_services.authorization import FeatureServiceAuthorization, FeatureServiceLayerAuthorization
-from databasin.feature_services.models import FeatureService, FeatureServiceLayer
+from tablo.models import FeatureService, FeatureServiceLayer
+from tablo.utils import JSONField
+from tablo.geom_utils import Extent
 
-from databasin.general.api import ReadOnlyAuthentication, JSONField
 
 # For FeatureServiceResource and FeatureServiceLayerResource, I tried to use a camel case serializer, but we
 # don't want certain lower-level items processed in this manner -- such as the actual database column names for

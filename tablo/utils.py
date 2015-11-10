@@ -1,3 +1,6 @@
+import json
+from tastypie.fields import CharField
+
 # code from http://danieljlewis.org/files/2010/06/Jenks.pdf
 # described at http://danieljlewis.org/2010/06/07/jenks-natural-breaks-algorithm-in-python/
 
@@ -93,3 +96,17 @@ def dictfetchall(cursor):
         dict(zip([col[0] for col in desc], row))
         for row in cursor.fetchall()
     ]
+
+
+class JSONField(CharField):
+    def convert(self, value):
+        if value is None:
+            return None
+        return json.loads(value, strict=False)
+
+    def hydrate(self, bundle):
+        value = super(JSONField, self).hydrate(bundle)
+        if value:
+            value = json.dumps(value)
+
+        return value

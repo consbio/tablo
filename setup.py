@@ -6,7 +6,7 @@ setup(
     keywords='feature service, map server, postgis, django',
     version='0.1.0',
     packages=['tablo'],
-    install_requires=['Django>=1.7.0'],
+    install_requires=['Django>=1.7.0', 'sqlparse>=0.1.18', 'pyproj'],
     url='http://github.com/consbio/tablo',
     license='BSD',
 )

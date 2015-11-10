@@ -2,13 +2,16 @@ import calendar
 import json
 import logging
 import re
+
 from django.db import models, connections, DatabaseError
 from django.db.models import signals
+
 import sqlparse
 from sqlparse.tokens import Name, Token, Whitespace, Punctuation, Keyword, Operator
-from clientlib.geometry import Extent, SpatialReference
-from databasin.datasets.models import DefinitionInstance
-from databasin.feature_services.util import get_jenks_breaks, dictfetchall
+
+from tablo.utils import get_jenks_breaks, dictfetchall
+from tablo.geom_utils import Extent, SpatialReference
+
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'BigIntegerField': 'esriFieldTypeInteger',
@@ -498,10 +501,10 @@ def populate_data(table_name, row_set):
         c.execute(insert_command + ','.join(values_list))
 
 
-def add_definition_fields(table_name, import_obj):
+def add_definition_fields(table_name, import_obj, fields):
 
     alter_commands = []
-    fields = DefinitionInstance.objects.filter(datasetId=import_obj.id)
+    # fields = DefinitionInstance.objects.filter(datasetId=import_obj.id)
     for field in fields:
         db_type = field.attribute.type
         if db_type.endswith('Location') or db_type == 'double':
