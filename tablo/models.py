@@ -55,22 +55,24 @@ class FeatureService(models.Model):
 
     @property
     def initial_extent(self):
-        if self._initial_extent is None:
+        if self._initial_extent is None and self.featureservicelayer_set.all():
             self._initial_extent = json.dumps(determine_extent(self.featureservicelayer_set.all()[0].table))
             self.save()
         return self._initial_extent
 
     @property
     def full_extent(self):
-        if self._full_extent is None:
+        if self._full_extent is None and self.featureservicelayer_set.all():
             self._full_extent = json.dumps(determine_extent(self.featureservicelayer_set.all()[0].table))
             self.save()
         return self._full_extent
 
     @property
     def dataset_id(self):
-        dataset_id = self.featureservicelayer_set.all()[0].table
-        return dataset_id.replace(TABLE_NAME_PREFIX, '').replace(IMPORT_SUFFIX, '')
+        if self.featureservicelayer_set.all():
+            dataset_id = self.featureservicelayer_set.all()[0].table
+            return dataset_id.replace(TABLE_NAME_PREFIX, '').replace(IMPORT_SUFFIX, '')
+        return 0
 
     def finalize(self, dataset_id):
         # Renames the table associated with the feature service to remove the IMPORT tag
