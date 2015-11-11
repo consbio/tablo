@@ -1,6 +1,7 @@
 import json
 from tastypie.fields import CharField
 
+
 # code from http://danieljlewis.org/files/2010/06/Jenks.pdf
 # described at http://danieljlewis.org/2010/06/07/jenks-natural-breaks-algorithm-in-python/
 
