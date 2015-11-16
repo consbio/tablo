@@ -1,7 +1,6 @@
 import json
 import time
 import re
-from datetime import datetime
 
 from django.http import HttpResponse, Http404, HttpResponseBadRequest
 from django.shortcuts import get_object_or_404
@@ -79,6 +78,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'type': 'Feature Layer',
             'capabilities': 'Query',
             'currentVersion': 10.2,
+            'maxRecordCount': 10000,
             'minScale': 0,
             'maxScale': 0,
             'name': self.object.name,
@@ -168,7 +168,7 @@ class QueryView(FeatureLayerView):
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        return_ids_only = kwargs.get('returnIdsOnly', 'false') == 'true'
+        return_ids_only = kwargs.get('returnIdsOnly', 'false') in ('true', 'True')
 
         if 'where' in kwargs and kwargs['where'] != '':
             search_params['additional_where_clause'] = kwargs.get('where')
@@ -199,6 +199,8 @@ class QueryView(FeatureLayerView):
         # When requesting selection IDs, ArcGIS sends both returnIdsOnly and returnCountOnly, but expects the response
         # in the 'returnIdsOnly' format
         if kwargs.get('returnIdsOnly'):
+            for feature in query_response:
+                print(feature)
             response = {
                 'count': len(query_response),
                 'objectIdFieldName': self.feature_service_layer.object_id_field,
