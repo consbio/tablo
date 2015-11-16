@@ -25,7 +25,7 @@ class FeatureServiceResource(ModelResource):
     class Meta:
         object_class = FeatureService
         resource_name = 'featureservice'
-        list_allowed_methods = ['get', 'post']
+        list_allowed_methods = ['get', 'post', 'delete']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureService.objects.all()
@@ -62,7 +62,7 @@ class FeatureServiceLayerResource(ModelResource):
         object_class = FeatureServiceLayer
         resource_name = 'featureservicelayer'
         filtering = {'layer_order': ALL}
-        list_allowed_methods = ['get', 'post']
+        list_allowed_methods = ['get', 'post', 'delete']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureServiceLayer.objects.all()

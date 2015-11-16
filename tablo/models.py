@@ -392,7 +392,7 @@ def delete_data_table(sender, instance, **kwargs):
         c.execute('DROP table IF EXISTS {table_name}'.format(table_name=instance.table))
 
 
-signals.post_delete.connect(delete_data_table, sender=FeatureServiceLayer)
+signals.pre_delete.connect(delete_data_table, sender=FeatureServiceLayer)
 
 
 def copy_data_table_for_import(dataset_id):
