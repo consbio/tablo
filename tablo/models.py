@@ -3,18 +3,18 @@ import json
 import logging
 import re
 import uuid
+import sqlparse
 
 from django.conf import settings
-from django.db import models, connections, DatabaseError, connection
+from django.db import models, DatabaseError, connection
 from django.db.models import signals
 
-import sqlparse
-from sqlparse.tokens import Name, Token, Whitespace, Punctuation, Keyword, Operator
+from sqlparse.tokens import Token, Punctuation, Keyword, Operator
 
 from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.geom_utils import Extent, SpatialReference
 
-TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/tablo/tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'BigIntegerField': 'esriFieldTypeInteger',
@@ -222,7 +222,7 @@ class FeatureServiceLayer(models.Model):
                 )
                 params.append(start_time)
                 params.append(end_time)
-        elif self.start_time_field and not only_return_count:
+        elif self.start_time_field and not only_return_count and not additional_where_clause:
             # If layer has a time component, default is to show first time step
             where += " AND {layer_time_field} = (SELECT MIN({layer_time_field}) FROM {table})".format(
                 layer_time_field=self.start_time_field,

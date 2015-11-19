@@ -1,31 +1,26 @@
 import json
 import logging
-import os
 import re
-import shutil
-from pydoc import describe
-from tempfile import mkdtemp
-from zipfile import ZipFile
 
 from django.conf.urls import url
-from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import InternalError
 from django.http import Http404
 from tastypie import fields
 from tastypie.authentication import MultiAuthentication, SessionAuthentication, ApiKeyAuthentication
-from tastypie.authorization import DjangoAuthorization, Authorization
+from tastypie.authorization import DjangoAuthorization
 from tastypie.constants import ALL
 from tastypie.exceptions import ImmediateHttpResponse
-from tastypie.http import HttpMultipleChoices, HttpBadRequest
+from tastypie.http import HttpBadRequest
 from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
 from tablo import csv_utils
 from tablo.csv_utils import determine_x_and_y_fields
-from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data, \
-    add_point_column, populate_point_data, copy_data_table_for_import, create_aggregate_database_table, \
-    populate_aggregate_table, add_definition_fields, Column
+from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data
+from tablo.models import add_point_column, populate_point_data, copy_data_table_for_import
+from tablo.models import create_aggregate_database_table, populate_aggregate_table, add_definition_fields, Column
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +114,7 @@ class FeatureServiceResource(ModelResource):
         add_point_column(service.dataset_id)
         populate_aggregate_table(table_name, row_columns, dataset_list)
 
-        return self.create_response(request, {'status': 'good'})
+        return self.create_response(request, {'table_name': table_name})
 
 
 class FeatureServiceLayerResource(ModelResource):
@@ -203,28 +198,29 @@ class TemporaryFileResource(ModelResource):
     def deploy(self, request, **kwargs):
         self.is_authenticated(request)
 
-        bundle = self.build_bundle(request=request)
-        obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
-
-        dataset_id = kwargs.get('dataset_id')
-        csv_info = json.loads(request.POST.get('csv_info'))
-        additional_fields = json.loads(request.POST.get('fields'))
-
-        row_set = csv_utils.prepare_csv_rows(obj.file)
-        sample_row = next(row_set.sample)
-        table_name = create_database_table(sample_row, dataset_id)
-        populate_data(table_name, row_set)
-
-        add_definition_fields(table_name, additional_fields)
-
-        bundle.data['table_name'] = table_name
-
-        add_point_column(dataset_id)
-
         try:
+            bundle = self.build_bundle(request=request)
+            obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+
+            dataset_id = kwargs.get('dataset_id')
+            csv_info = json.loads(request.POST.get('csv_info'))
+            additional_fields = json.loads(request.POST.get('fields'))
+
+            row_set = csv_utils.prepare_csv_rows(obj.file)
+            sample_row = next(row_set.sample)
+            table_name = create_database_table(sample_row, dataset_id)
+            populate_data(table_name, row_set)
+
+            add_definition_fields(table_name, additional_fields)
+
+            bundle.data['table_name'] = table_name
+
+            add_point_column(dataset_id)
+
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
         except InternalError as e:
+            logger.exception()
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)

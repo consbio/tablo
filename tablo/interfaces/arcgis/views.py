@@ -160,6 +160,7 @@ class GenerateRendererView(FeatureLayerView):
         if self.callback:
             content = '{callback}({data})'.format(callback=self.callback, data=content)
             content_type = 'text/javascript'
+
         return HttpResponse(content=content, content_type=content_type)
 
 
@@ -199,8 +200,6 @@ class QueryView(FeatureLayerView):
         # When requesting selection IDs, ArcGIS sends both returnIdsOnly and returnCountOnly, but expects the response
         # in the 'returnIdsOnly' format
         if kwargs.get('returnIdsOnly'):
-            for feature in query_response:
-                print(feature)
             response = {
                 'count': len(query_response),
                 'objectIdFieldName': self.feature_service_layer.object_id_field,
