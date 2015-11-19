@@ -8,7 +8,7 @@ urlpatterns = patterns('',
         url(r'^$', FeatureServiceDetailView.as_view(), name='fs_arcgis_featureservice'),
         url(r'^(?P<layer_index>[0-9]+)/?', include(patterns('',
             url(r'^$', FeatureServiceLayerDetailView.as_view(), name='fs_arcgis_featureservicelayer'),
-            url(r'^generateRenderer/$', GenerateRendererView.as_view(), name='fs_arcgis_generateRenderer'),
+            url(r'^generateRenderer', GenerateRendererView.as_view(), name='fs_arcgis_generateRenderer'),
             url(r'^query', QueryView.as_view(), name='fs_arcgis_query')
         )))
     )))

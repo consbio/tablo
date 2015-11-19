@@ -223,7 +223,8 @@ class TemporaryFileResource(ModelResource):
 
         try:
             populate_point_data(dataset_id, csv_info)
+            obj.delete()    # Temporary file has been moved to database, safe to delete
         except InternalError as e:
-            raise ImmediateHttpResponse(HttpBadRequest('Error in creating points, returning to configuration...'))
+            raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
