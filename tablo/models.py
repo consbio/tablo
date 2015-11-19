@@ -2,8 +2,10 @@ import calendar
 import json
 import logging
 import re
+import uuid
 
-from django.db import models, connections, DatabaseError
+from django.conf import settings
+from django.db import models, connections, DatabaseError, connection
 from django.db.models import signals
 
 import sqlparse
@@ -12,6 +14,7 @@ from sqlparse.tokens import Name, Token, Whitespace, Punctuation, Keyword, Opera
 from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.geom_utils import Extent, SpatialReference
 
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'BigIntegerField': 'esriFieldTypeInteger',
@@ -83,7 +86,7 @@ class FeatureService(models.Model):
         old_table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
         new_table_name = TABLE_NAME_PREFIX + dataset_id
 
-        with connections['tablo'].cursor() as c:
+        with connection.cursor() as c:
             c.execute('DROP TABLE IF EXISTS {new_table_name}'.format(
                 new_table_name=new_table_name
             ))
@@ -149,7 +152,6 @@ class FeatureServiceLayer(models.Model):
     @property
     def fields(self):
         fields = []
-        connection = connections['tablo']
         with connection.cursor() as c:
             c.execute('select * from {0} limit 1'.format(self.table))
             # c.description won't be populated without first running the query above
@@ -158,7 +160,7 @@ class FeatureServiceLayer(models.Model):
                     field_type = 'OID'
                 elif field_info.type_code in connection.introspection.data_types_reverse:
                     field_type = connection.introspection.data_types_reverse[field_info.type_code]
-                elif field_info.type_code == 16401:  # POSTGIS code, not built into the PostgreSQL driver
+                elif field_info.name == POINT_FIELD_NAME:
                     field_type = 'Geometry'
                 else:
                     field_type = 'Unknown'
@@ -415,6 +417,8 @@ def copy_data_table_for_import(dataset_id):
         c.execute(copy_table_command)
         c.execute(index_command)
 
+    return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+
 
 def create_database_table(row, dataset_id):
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
@@ -483,7 +487,7 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
 
 
 def populate_data(table_name, row_set):
-    first_row = row_set.sample.next()
+    first_row = next(row_set.sample)
     insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
         table_name=table_name,
         field_list=','.join([cell.column for cell in first_row])
@@ -497,29 +501,27 @@ def populate_data(table_name, row_set):
             if not header_skipped:
                 header_skipped = True
                 continue
-            individual_insert_command = c.mogrify(values_parenthetical, [cell.value for cell in row])
+            individual_insert_command = c.mogrify(values_parenthetical, [cell.value for cell in row]).decode('utf-8')
             values_list.append(individual_insert_command)
 
         c.execute(insert_command + ','.join(values_list))
 
 
-def add_definition_fields(table_name, import_obj, fields):
+def add_definition_fields(table_name, fields):
 
     alter_commands = []
-    # fields = DefinitionInstance.objects.filter(datasetId=import_obj.id)
     for field in fields:
-        db_type = field.attribute.type
-        if db_type.endswith('Location') or db_type == 'double':
-            db_type = 'double precision'
-        elif 'dropdown' in db_type or db_type == 'string':
-            db_type = 'text'
+        db_type = field.get('type')
+        name = field.get('name')
+        required = field.get('required', False)
+        value = field.get('value')
 
         alter_command = 'ALTER TABLE {table_name} ADD COLUMN {field_name} {db_type}{not_null} DEFAULT {value}'.format(
             table_name=table_name,
-            field_name=field.attribute.name,
+            field_name=name,
             db_type=db_type,
-            not_null=' NOT NULL' if field.attribute.required else '',
-            value=field.value if db_type != 'text' else "'{0}'".format(field.value)
+            not_null=' NOT NULL' if required else '',
+            value=value if db_type != 'text' else "'{0}'".format(value)
         )
 
         alter_commands.append(alter_command)
@@ -606,9 +608,26 @@ def determine_extent(table):
 
 
 def get_cursor():
-    return connections['tablo'].cursor()
+    return connection.cursor()
 
 
 class Column(object):
     def __init__(self, **entries):
         self.__dict__.update(entries)
+
+
+class TemporaryFile(models.Model):
+    """A temporary file upload"""
+
+    uuid = models.CharField(max_length=36, default=uuid.uuid4)
+    date = models.DateTimeField(auto_now_add=True)
+    filename = models.CharField(max_length=100)
+    filesize = models.BigIntegerField()
+    file = models.FileField(upload_to=TEMPORARY_FILE_LOCATION, max_length=1024)
+
+    @property
+    def extension(self):
+        if self.filename.find(".") != -1:
+            return self.filename[self.filename.rfind(".")+1:]
+        else:
+            return ""

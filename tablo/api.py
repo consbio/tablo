@@ -1,20 +1,35 @@
+import json
 import logging
+import os
+import re
+import shutil
+from pydoc import describe
+from tempfile import mkdtemp
+from zipfile import ZipFile
 
 from django.conf.urls import url
 from django.core.exceptions import ObjectDoesNotExist, MultipleObjectsReturned
+from django.db import InternalError
 from django.http import Http404
 from tastypie import fields
 from tastypie.authentication import MultiAuthentication, SessionAuthentication, ApiKeyAuthentication
 from tastypie.authorization import DjangoAuthorization, Authorization
 from tastypie.constants import ALL
-from tastypie.http import HttpMultipleChoices
+from tastypie.exceptions import ImmediateHttpResponse
+from tastypie.http import HttpMultipleChoices, HttpBadRequest
 from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
+from tastypie.utils import trailing_slash
 
-from tablo.models import FeatureService, FeatureServiceLayer
-
+from tablo import csv_utils
+from tablo.csv_utils import determine_x_and_y_fields
+from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data, \
+    add_point_column, populate_point_data, copy_data_table_for_import, create_aggregate_database_table, \
+    populate_aggregate_table, add_definition_fields, Column
 
 logger = logging.getLogger(__name__)
+
+TYPE_REGEX = re.compile(r'\([^\)]*\)')
 
 
 class FeatureServiceResource(ModelResource):
@@ -25,13 +40,12 @@ class FeatureServiceResource(ModelResource):
     class Meta:
         object_class = FeatureService
         resource_name = 'featureservice'
-        list_allowed_methods = ['get', 'post', 'delete']
+        list_allowed_methods = ['get', 'post']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureService.objects.all()
-        authorization = Authorization()
-        #authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
-        #authorization = DjangoAuthorization
+        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
+        authorization = DjangoAuthorization()
 
     def prepend_urls(self):
         return [
@@ -39,17 +53,71 @@ class FeatureServiceResource(ModelResource):
                 r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/finalize'.format(
                     self._meta.resource_name
                 ), self.wrap_view('finalize'), name="api_featureservice_finalize"
+            ),
+            url(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/copy'.format(
+                    self._meta.resource_name
+                ), self.wrap_view('copy'), name="api_featureservice_copy"
+            ),
+            url(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine_tables'.format(
+                    self._meta.resource_name
+                ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
             )
         ]
 
     def finalize(self, request, **kwargs):
-        print(kwargs['service_id'])
         try:
             service = FeatureService.objects.get(id=kwargs['service_id'])
         except ObjectDoesNotExist:
             return Http404()
 
         service.finalize(service.dataset_id)
+
+        return self.create_response(request, {'status': 'good'})
+
+    def copy(self, request, **kwargs):
+        try:
+            service = FeatureService.objects.get(id=kwargs['service_id'])
+        except ObjectDoesNotExist:
+            return Http404()
+
+        table_name = copy_data_table_for_import(service.dataset_id)
+
+        old_layers = service.featureservicelayer_set.all()
+
+        service.id = None
+        service._initial_extent = None
+        service._full_extent = None
+
+        service.save()
+
+        for layer in old_layers:
+            layer.id = None
+            layer.service = service
+            layer._extent = None
+            layer._time_extent = None
+            layer.table = table_name
+            layer.save()
+
+        return self.create_response(request, {
+            'service_id': service.id,
+            'time_extent': layer.time_extent
+        })
+
+    def combine_tables(self, request, **kwargs):
+        try:
+            service = FeatureService.objects.get(id=kwargs['service_id'])
+        except ObjectDoesNotExist:
+            return Http404()
+
+        columns = json.loads(request.POST.get('columns'))
+        row_columns = [Column(column=column['name'], type=column['type']) for column in columns]
+
+        dataset_list = json.loads(request.POST.get('dataset_list'))
+        table_name = create_aggregate_database_table(row_columns, service.dataset_id)
+        add_point_column(service.dataset_id)
+        populate_aggregate_table(table_name, row_columns, dataset_list)
 
         return self.create_response(request, {'status': 'good'})
 
@@ -62,14 +130,100 @@ class FeatureServiceLayerResource(ModelResource):
         object_class = FeatureServiceLayer
         resource_name = 'featureservicelayer'
         filtering = {'layer_order': ALL}
-        list_allowed_methods = ['get', 'post', 'delete']
+        list_allowed_methods = ['get', 'post']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureServiceLayer.objects.all()
-        authorization = Authorization()
-        #authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
-        #authorization = DjangoAuthorization
+        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
+        authorization = DjangoAuthorization()
 
 
+class TemporaryFileResource(ModelResource):
+    uuid = fields.CharField(attribute='uuid', readonly=True)
 
+    class Meta:
+        queryset = TemporaryFile.objects.all()
+        list_allowed_methods = ['get']
+        detail_allowed_methods = ['get', 'delete']
+        resource_name = 'temporary-files'
+        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
+        authorization = DjangoAuthorization()
+        fields = ['uuid', 'date', 'filename']
+        detail_uri_name = 'uuid'
+        serializer = Serializer(formats=['json', 'jsonp'])
 
+    def _convert_number(self, number):
+        """Converts a number to float or int as appropriate"""
+
+        number = float(number)
+        return int(number) if number.is_integer() else float(number)
+
+    def prepend_urls(self):
+        return [
+            url(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/describe%s$" % (
+                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+                ),
+                self.wrap_view('describe'), name='temporary_file_describe'
+            ),
+            url(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/deploy%s$" % (
+                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+                ),
+                self.wrap_view('deploy'), name='temporary_file_deploy'
+            )
+        ]
+
+    def describe(self, request, **kwargs):
+        self.is_authenticated(request)
+
+        bundle = self.build_bundle(request=request)
+        obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+
+        if obj.extension == 'csv':
+            csv_file_name = obj.file.name
+        else:
+            raise ImmediateHttpResponse(HttpBadRequest('Unsupported file format.'))
+
+        row_set = csv_utils.prepare_csv_rows(obj.file)
+
+        sample_row = next(row_set.sample)
+        bundle.data['fieldNames'] = [cell.column for cell in sample_row]
+        bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
+
+        x_field, y_field = determine_x_and_y_fields(sample_row)
+        if x_field and y_field:
+            bundle.data['xColumn'] = x_field
+            bundle.data['yColumn'] = y_field
+
+        bundle.data.update({'file_name': csv_file_name})
+
+        return self.create_response(request, bundle)
+
+    def deploy(self, request, **kwargs):
+        self.is_authenticated(request)
+
+        bundle = self.build_bundle(request=request)
+        obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+
+        dataset_id = kwargs.get('dataset_id')
+        csv_info = json.loads(request.POST.get('csv_info'))
+        additional_fields = json.loads(request.POST.get('fields'))
+
+        row_set = csv_utils.prepare_csv_rows(obj.file)
+        sample_row = next(row_set.sample)
+        table_name = create_database_table(sample_row, dataset_id)
+        populate_data(table_name, row_set)
+
+        add_definition_fields(table_name, additional_fields)
+
+        bundle.data['table_name'] = table_name
+
+        add_point_column(dataset_id)
+
+        try:
+            populate_point_data(dataset_id, csv_info)
+        except InternalError as e:
+            raise ImmediateHttpResponse(HttpBadRequest('Error in creating points, returning to configuration...'))
+
+        return self.create_response(request, bundle)
