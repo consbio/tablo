@@ -124,7 +124,7 @@ class FeatureServiceLayerResource(ModelResource):
     class Meta:
         object_class = FeatureServiceLayer
         resource_name = 'featureservicelayer'
-        filtering = {'layer_order': ALL}
+        filtering = {'layer_order': ALL, 'table': ALL}
         list_allowed_methods = ['get', 'post']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
