@@ -82,7 +82,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'minScale': 0,
             'maxScale': 0,
             'name': self.object.name,
-            'description': self.object.description,
+            'description': self.object.description or '',
             'fields': self.object.fields,
             'drawingInfo': json.loads(self.object.drawing_info),
             'geometryType': self.object.geometry_type,
