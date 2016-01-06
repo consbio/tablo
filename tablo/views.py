@@ -24,6 +24,7 @@ class TemporaryFileUploadViewBase(View):
     @method_decorator(permission_required('tablo.add_temporaryfile'))
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
+        logger.info('Inside TemporaryFileUploadViewBase')
         return super(TemporaryFileUploadViewBase, self).dispatch(request, *args, **kwargs)
 
     def process_temporary_file(self, tmp_file):
@@ -89,6 +90,8 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         )
         tmp_file.file.save(filename, File(f), save=False)
         tmp_file.filesize = tmp_file.file.size
+
+        logger.info('Temp file created')
 
         return tmp_file
 
