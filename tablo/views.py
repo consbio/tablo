@@ -87,9 +87,11 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
 
         try:
             tmp_file = TemporaryFile(
-                filename=filename
+                filename=filename,
+                filesize=0
             )
             tmp_file.file.save(filename, File(f), save=False)
+            logger.info('filesize', tmp_file.file.size)
             tmp_file.filesize = tmp_file.file.size or 0
         except Exception as e:
             logger.error('Error creating temporary file')
