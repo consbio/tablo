@@ -200,7 +200,7 @@ class TemporaryFileResource(ModelResource):
 
         try:
             bundle = self.build_bundle(request=request)
-            obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+            obj = self.obj_get(bundle)
 
             dataset_id = kwargs.get('dataset_id')
             csv_info = json.loads(request.POST.get('csv_info'))
