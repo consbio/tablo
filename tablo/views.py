@@ -94,7 +94,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
             logger.info('filesize', tmp_file.file.size)
             tmp_file.filesize = tmp_file.file.size or 0
         except Exception as e:
-            logger.error('Error creating temporary file')
+            logger.exception('Error creating temporary file')
 
 
         logger.info('Temp file created')
