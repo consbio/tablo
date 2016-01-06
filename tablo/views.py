@@ -84,7 +84,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         if request.GET.get('url'):
             return self.process_temporary_file(self.download_file(six.moves.urllib.parse.unquote(request.GET.get('url'))))
         else:
-            return HttpResponseBadRequest()
+            return HttpResponseBadRequest('Missing URL')
 
     def post(self, request):
         if request.POST.get('url'):
