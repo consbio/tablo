@@ -7,6 +7,8 @@ from urllib.error import URLError
 
 from django.core.files import File
 from django.http import HttpResponseBadRequest, HttpResponse
+from django.contrib.auth.decorators import login_required, permission_required
+from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 from django.views.generic.edit import ProcessFormView, FormMixin
@@ -16,6 +18,9 @@ from tablo.models import TemporaryFile
 
 
 class TemporaryFileUploadViewBase(View):
+    @method_decorator(login_required)
+    @method_decorator(permission_required('ncdjango.add_temporaryfile'))
+    @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
         return super(TemporaryFileUploadViewBase, self).dispatch(request, *args, **kwargs)
 
