@@ -59,7 +59,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         try:
             return super(TemporaryFileUploadUrlView, self).dispatch(request, *args, **kwargs)
         except URLError as e:
-            return HttpResponseBadRequest(e.reason)
+            return HttpResponseBadRequest('{0}{1}'.format(request.POST.get('url'), e.reason))
 
     def download_file(self, url):
 
