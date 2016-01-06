@@ -199,10 +199,14 @@ class TemporaryFileResource(ModelResource):
         self.is_authenticated(request)
 
         try:
-            bundle = self.build_bundle(request=request)
-            obj = self.obj_get(bundle)
 
             dataset_id = kwargs.get('dataset_id')
+
+            del kwargs['dataset_id']
+            bundle = self.build_bundle(request=request)
+            obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+
+
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
