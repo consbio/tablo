@@ -18,6 +18,8 @@ from tablo.models import TemporaryFile
 
 
 class TemporaryFileUploadViewBase(View):
+    @method_decorator(login_required)
+    @method_decorator(permission_required('tablo.add_temporaryfile'))
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
         return super(TemporaryFileUploadViewBase, self).dispatch(request, *args, **kwargs)
