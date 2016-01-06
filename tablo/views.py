@@ -28,7 +28,7 @@ class TemporaryFileUploadViewBase(View):
 
     def process_temporary_file(self, tmp_file):
 
-        logger.log('Inside process_temporary_file', tmp_file)
+        logger.info('Inside process_temporary_file: {0}'.format(tmp_file))
         """Truncates the filename if necessary, saves the model, and returns a response"""
 
         #Truncate filename if necessary
@@ -72,7 +72,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
 
     def download_file(self, url):
 
-        logger.log('About to download File', url)
+        logger.info('About to download File', url)
         url_f = six.moves.urllib.request.urlopen(url)
 
         filename = url.split('?', 1)[0].split('/')[-1]
@@ -82,7 +82,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         f = tempfile.TemporaryFile()
         shutil.copyfileobj(url_f, f)
 
-        logger.log('File downloaded')
+        logger.info('File downloaded')
 
         tmp_file = TemporaryFile(
             filename=filename
@@ -99,7 +99,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
             return HttpResponseBadRequest('Missing URL')
 
     def post(self, request):
-        logger.log('Inside TemporaryFileUploadUrlView.POST: {0}'.format(request.POST.get('url')))
+        logger.info('Inside TemporaryFileUploadUrlView.POST: ' + format(request.POST.get('url')))
         if request.POST.get('url'):
             return self.process_temporary_file(self.download_file(request.POST.get('url')))
         else:
