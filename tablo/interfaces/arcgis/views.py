@@ -226,7 +226,7 @@ class QueryView(FeatureLayerView):
             content = '{callback}({data})'.format(callback=self.callback, data=content)
             content_type = 'text/javascript'
 
-        logger.log('Finished with QueryView.handle_request')
+        logger.debug('Finished with QueryView.handle_request')
         return HttpResponse(content=content, content_type=content_type)
 
 
