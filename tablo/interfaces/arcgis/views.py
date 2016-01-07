@@ -125,6 +125,9 @@ class FeatureLayerView(View):
 
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
+
+        logger.debug('Entering FeatureLayerView.dispatch')
+
         service_id = kwargs.get('service_id')
         layer_index = kwargs.get('layer_index')
 
@@ -171,7 +174,7 @@ class QueryView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):
 
-        logger.debug('Starting QueryView.handle_request');
+        logger.debug('Starting QueryView.handle_request')
 
         search_params = {}
         return_ids_only = kwargs.get('returnIdsOnly', 'false') in ('true', 'True')
