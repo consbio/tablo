@@ -1,5 +1,4 @@
 import json
-import logging
 import time
 import re
 
@@ -13,8 +12,6 @@ from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
-
-logger = logging.getLogger(__name__)
 
 
 class FeatureServiceDetailView(DetailView):
@@ -126,8 +123,6 @@ class FeatureLayerView(View):
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
 
-        logger.debug('Entering FeatureLayerView.dispatch')
-
         service_id = kwargs.get('service_id')
         layer_index = kwargs.get('layer_index')
 
@@ -173,8 +168,6 @@ class GenerateRendererView(FeatureLayerView):
 class QueryView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):
-
-        logger.debug('Starting QueryView.handle_request')
 
         search_params = {}
         return_ids_only = kwargs.get('returnIdsOnly', 'false') in ('true', 'True')
@@ -229,7 +222,6 @@ class QueryView(FeatureLayerView):
             content = '{callback}({data})'.format(callback=self.callback, data=content)
             content_type = 'text/javascript'
 
-        logger.debug('Finished with QueryView.handle_request')
         return HttpResponse(content=content, content_type=content_type)
 
 

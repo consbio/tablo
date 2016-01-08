@@ -1,5 +1,4 @@
 import json
-import logging
 import shutil
 import tempfile
 import six
@@ -17,19 +16,16 @@ from django.views.generic.edit import ProcessFormView, FormMixin
 from tablo.forms import TemporaryFileForm
 from tablo.models import TemporaryFile
 
-logger = logging.getLogger(__name__)
 
 class TemporaryFileUploadViewBase(View):
     @method_decorator(login_required)
     @method_decorator(permission_required('tablo.add_temporaryfile'))
     @method_decorator(csrf_exempt)
     def dispatch(self, request, *args, **kwargs):
-        logger.debug('Inside TemporaryFileUploadViewBase')
         return super(TemporaryFileUploadViewBase, self).dispatch(request, *args, **kwargs)
 
     def process_temporary_file(self, tmp_file):
 
-        logger.debug('Inside process_temporary_file: {0}'.format(tmp_file))
         """Truncates the filename if necessary, saves the model, and returns a response"""
 
         #Truncate filename if necessary
@@ -73,7 +69,6 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
 
     def download_file(self, url):
 
-        logger.debug('About to download File', url)
         url_f = six.moves.urllib.request.urlopen(url)
 
         filename = url.split('?', 1)[0].split('/')[-1]
@@ -83,21 +78,12 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         f = tempfile.TemporaryFile()
         shutil.copyfileobj(url_f, f)
 
-        logger.debug('File downloaded')
-
-        try:
-            tmp_file = TemporaryFile(
-                filename=filename,
-                filesize=0
-            )
-            tmp_file.file.save(filename, File(f), save=False)
-            logger.debug('filesize', tmp_file.file.size)
-            tmp_file.filesize = tmp_file.file.size or 0
-        except Exception as e:
-            logger.exception('Error creating temporary file')
-
-
-        logger.debug('Temp file created')
+        tmp_file = TemporaryFile(
+            filename=filename,
+            filesize=0
+        )
+        tmp_file.file.save(filename, File(f), save=False)
+        tmp_file.filesize = tmp_file.file.size or 0
 
         return tmp_file
 
@@ -108,7 +94,6 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
             return HttpResponseBadRequest('Missing URL')
 
     def post(self, request):
-        logger.debug('Inside TemporaryFileUploadUrlView.POST: ' + format(request.POST.get('url')))
         if request.POST.get('url'):
             return self.process_temporary_file(self.download_file(request.POST.get('url')))
         else:
