@@ -240,7 +240,6 @@ class FeatureServiceLayer(models.Model):
                 fields=','.join(return_fields),
                 table=self.table
             )
-            logger.debug('Query: %s', query_clause)
             c.execute(query_clause, params)
             response = dictfetchall(c)
 
