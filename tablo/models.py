@@ -478,7 +478,6 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             dataset_table_name=TABLE_NAME_PREFIX + dataset_id,
             spatial_field=POINT_FIELD_NAME
         )
-        logger.info(insert_command)
         all_commands.append(insert_command)
 
     with get_cursor() as c:
