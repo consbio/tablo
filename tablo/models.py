@@ -433,7 +433,7 @@ def create_database_table(row, dataset_id):
         'string': 'text',
         'xlocation': 'double precision',
         'ylocation': 'double precision',
-        'dropdownEdit': 'text',
+        'dropdownedit': 'text',
         'dropdown': 'text',
         'double': 'double'
     }
