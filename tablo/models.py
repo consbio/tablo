@@ -435,7 +435,7 @@ def create_database_table(row, dataset_id):
         'ylocation': 'double precision',
         'dropdownedit': 'text',
         'dropdown': 'text',
-        'double': 'double'
+        'double': 'double precision'
     }
     for cell in row:
         create_table_command += ', {field_name} {type}'.format(
