@@ -466,12 +466,21 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
 
     all_commands = [delete_command]
     for dataset_id in datasets_ids_to_combine:
+
+        with get_cursor() as c:
+            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
+                dataset_table_name=TABLE_NAME_PREFIX + dataset_id
+            ))
+            colnames_in_table = [desc[0] for desc in c.description]
+
+        current_columns = [column for column in columns if column.column in colnames_in_table]
+
         insert_command = (
             'INSERT INTO {table_name} ({definition_fields}, {source_dataset}, {spatial_field}) '
             'SELECT {definition_fields}, {dataset_id}, {spatial_field} FROM {dataset_table_name}'
         ).format(
             table_name=aggregate_table_name,
-            definition_fields=','.join([column.column for column in columns]),
+            definition_fields=','.join([column.column for column in current_columns]),
             source_dataset=SOURCE_DATASET_FIELD_NAME,
             dataset_id="'{0}'".format(dataset_id),
             dataset_table_name=TABLE_NAME_PREFIX + dataset_id,
