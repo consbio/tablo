@@ -165,6 +165,28 @@ class GenerateRendererView(FeatureLayerView):
         return HttpResponse(content=content, content_type=content_type)
 
 
+class TimeQueryView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+
+        time_query_result = self.feature_service_layer.get_distinct_geometries_across_time()
+
+        response = {
+            'fields': [{'name': 'count', 'alias':'count', 'type': 'esriFieldTypeInteger'}],
+            'geometryType': 'esriGeometryPoint',
+            'count': len(time_query_result),
+            'features': covert_wkt_to_esri_feature(time_query_result)
+        }
+
+        content = json.dumps(response, default=json_date_serializer)
+        content_type = 'application/json'
+        if self.callback:
+            content = '{callback}({data})'.format(callback=self.callback, data=content)
+            content_type = 'text/javascript'
+
+        return HttpResponse(content=content, content_type=content_type)
+
+
 class QueryView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):

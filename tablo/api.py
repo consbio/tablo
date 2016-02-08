@@ -113,6 +113,10 @@ class FeatureServiceResource(ModelResource):
         table_name = create_aggregate_database_table(row_columns, service.dataset_id)
         add_point_column(service.dataset_id)
         populate_aggregate_table(table_name, row_columns, dataset_list)
+        service._full_extent = None
+        service._initial_extent = None
+        service.featureservicelayer_set.first()._extent = None
+        service.save()
 
         return self.create_response(request, {'table_name': table_name})
 

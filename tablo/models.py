@@ -245,6 +245,18 @@ class FeatureServiceLayer(models.Model):
 
         return response
 
+    def get_distinct_geometries_across_time(self, *kwargs):
+        time_query = 'SELECT DISTINCT ST_AsText({geom_field}), count(*) FROM {table} GROUP BY ST_AsText({geom_field})'.format(
+            geom_field=POINT_FIELD_NAME,
+            table=self.table
+        )
+
+        with get_cursor() as c:
+            c.execute(time_query)
+            response = dictfetchall(c)
+
+        return response
+
     def _validate_where_clause(self, where):
         if where is None or where == '1=1':
             return True
