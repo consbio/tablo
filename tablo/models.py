@@ -191,6 +191,7 @@ class FeatureServiceLayer(models.Model):
         start_time = kwargs.get('start_time')
         end_time = kwargs.get('end_time')
         extent = kwargs.get('extent')
+        out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
         return_fields = kwargs.get('return_fields', [])
         return_geometry = kwargs.get('return_geometry', True)
         only_return_count = kwargs.get('only_return_count', False)
@@ -203,7 +204,7 @@ class FeatureServiceLayer(models.Model):
         if only_return_count:
             return_fields = ['count(*)']
         elif return_geometry:
-            return_fields.append('ST_AsText(dbasin_geom)')
+            return_fields.append('ST_AsText(ST_Transform(dbasin_geom, {0}))'.format(out_sr))
 
         params = []   # Collect parameters to the query that we can let the SQL engine escape for us
         where = '1=1'

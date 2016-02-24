@@ -202,6 +202,8 @@ class QueryView(FeatureLayerView):
             search_params['start_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(start_time)/1000))
             search_params['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(end_time)/1000))
 
+        search_params['out_sr'] = kwargs.get('outSR')
+
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
