@@ -18,7 +18,8 @@ from tastypie.utils import trailing_slash
 
 from tablo import csv_utils
 from tablo.csv_utils import determine_x_and_y_fields
-from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data
+from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data, \
+    update_definition_fields
 from tablo.models import add_point_column, populate_point_data, copy_data_table_for_import
 from tablo.models import create_aggregate_database_table, populate_aggregate_table, add_definition_fields, Column
 
@@ -170,6 +171,12 @@ class TemporaryFileResource(ModelResource):
                     self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
                 ),
                 self.wrap_view('deploy'), name='temporary_file_deploy'
+            ),
+            url(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/append%s$" % (
+                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+                ),
+                self.wrap_view('append'), name='temporary_file_append'
             )
         ]
 
@@ -203,13 +210,11 @@ class TemporaryFileResource(ModelResource):
         self.is_authenticated(request)
 
         try:
-
             dataset_id = kwargs.get('dataset_id')
 
             del kwargs['dataset_id']
             bundle = self.build_bundle(request=request)
             obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
-
 
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
@@ -224,6 +229,36 @@ class TemporaryFileResource(ModelResource):
             bundle.data['table_name'] = table_name
 
             add_point_column(dataset_id)
+
+            populate_point_data(dataset_id, csv_info)
+            obj.delete()    # Temporary file has been moved to database, safe to delete
+        except InternalError as e:
+            logger.exception()
+            raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
+
+        return self.create_response(request, bundle)
+
+    def append(self, request, **kwargs):
+        self.is_authenticated(request)
+
+        try:
+            dataset_id = kwargs.get('dataset_id')
+
+            del kwargs['dataset_id']
+            bundle = self.build_bundle(request=request)
+            obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
+
+            csv_info = json.loads(request.POST.get('csv_info'))
+            additional_fields = json.loads(request.POST.get('fields'))
+
+            row_set = csv_utils.prepare_csv_rows(obj.file)
+            sample_row = next(row_set.sample)
+            table_name = create_database_table(sample_row, dataset_id, append=True)
+
+            update_definition_fields(table_name, additional_fields)
+            populate_data(table_name, row_set)
+
+            bundle.data['table_name'] = table_name
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
