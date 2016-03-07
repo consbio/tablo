@@ -531,9 +531,9 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=TABLE_NAME_PREFIX + dataset_id
             ))
-            colnames_in_table = [desc[0] for desc in c.description]
+            colnames_in_table = [desc[0].lower() for desc in c.description]
 
-        current_columns = [column for column in columns if column.column in colnames_in_table]
+        current_columns = [column for column in columns if column.column.lower() in colnames_in_table]
 
         insert_command = (
             'INSERT INTO {table_name} ({definition_fields}, {source_dataset}, {spatial_field}) '
