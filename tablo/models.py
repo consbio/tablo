@@ -4,6 +4,7 @@ import logging
 import re
 import uuid
 import sqlparse
+from datetime import date, datetime
 
 from django.conf import settings
 from django.db import models, DatabaseError, connection
@@ -22,15 +23,18 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'TextField': 'esriFieldTypeString',
     'FloatField': 'esriFieldTypeDouble',
     'DateField': 'esriFieldTypeString',
+    'DateTimeField': 'esriFieldTypeString',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID'
 }
 
 IMPORT_SUFFIX = '_import'
-PRIMARY_KEY_NAME = 'db_id'
 TABLE_NAME_PREFIX = 'db_'
+PRIMARY_KEY_NAME = 'db_id'
 POINT_FIELD_NAME = 'dbasin_geom'
+CREATOR_FIELD_NAME = 'db_creator'
+CREATED_FIELD_NAME = 'db_created_date'
 SOURCE_DATASET_FIELD_NAME = 'source_dataset'
 WEB_MERCATOR_SRID = 3857
 
@@ -488,7 +492,7 @@ def create_database_table(row, dataset_id, append=False):
         )
         type_conversion = {
             'decimal': 'double precision',
-            'date': 'date',
+            'date': 'timestamp',
             'integer': 'integer',
             'string': 'text',
             'xlocation': 'double precision',
@@ -502,6 +506,15 @@ def create_database_table(row, dataset_id, append=False):
                 field_name=cell.column,
                 type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
             )
+        create_table_command += ', {field_name} {type}'.format(
+            field_name=CREATOR_FIELD_NAME,
+            type='text'
+        )
+        create_table_command += ', {field_name} {type}'.format(
+            field_name=CREATED_FIELD_NAME,
+            type='timestamp'
+        )
+
         create_table_command += ');'
 
         try:
@@ -554,49 +567,79 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             c.execute(command)
 
 
-def populate_data(table_name, row_set):
+def populate_data(table_name, row_set, creator):
     first_row = next(row_set.sample)
+    field_list = '{field_list},{creator_field},{created_field}'.format(
+        field_list=','.join([cell.column for cell in first_row]),
+        creator_field=CREATOR_FIELD_NAME,
+        created_field=CREATED_FIELD_NAME
+    )
     insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
         table_name=table_name,
-        field_list=','.join([cell.column for cell in first_row])
+        field_list=field_list
     )
 
     with get_cursor() as c:
         header_skipped = False
-        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
+        value_list = '{values},%s,%s'.format(
+            values=','.join(['%s' for cell in first_row])
+        )
+        values_parenthetical = '({values})'.format(values=value_list)
         values_list = []
         for row in row_set:
             if not header_skipped:
                 header_skipped = True
                 continue
-            individual_insert_command = c.mogrify(values_parenthetical, [cell.value for cell in row]).decode('utf-8')
+            all_values = [cell.value for cell in row]
+            all_values.append(creator)
+            all_values.append(datetime.utcnow())
+            individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
             values_list.append(individual_insert_command)
 
         c.execute(insert_command + ','.join(values_list))
 
 
-def add_definition_fields(table_name, fields):
-
+def add_database_fields(table_name, fields):
     alter_commands = []
     for field in fields:
         db_type = field.get('type')
-        name = field.get('name')
+        column_name = field.get('name')
         required = field.get('required', False)
         value = field.get('value')
 
-        alter_command = 'ALTER TABLE {table_name} ADD COLUMN {field_name} {db_type}{not_null} DEFAULT {value}'.format(
+        check_command = ('SELECT EXISTS('
+                         'SELECT column_name FROM information_schema.columns '
+                         'WHERE table_name=%s and column_name=%s)')
+        with get_cursor() as c:
+            c.execute(check_command, (table_name, column_name))
+            column_exists = bool(c.fetchone)
+
+        if column_exists:
+            logger.info('Column {column_name} already exists in table {table_name}'.format(
+                table_name=table_name,
+                column_name=column_name
+            ))
+        else:
+            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {db_type}{not_null}'.format(
+                table_name=table_name,
+                column_name=column_name,
+                db_type=db_type,
+                not_null=' NOT NULL' if required else '',
+
+            )
+
+            alter_commands.append(alter_command)
+
+        set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
             table_name=table_name,
-            field_name=name,
-            db_type=db_type,
-            not_null=' NOT NULL' if required else '',
+            column_name=column_name,
             value=value if db_type != 'text' else "'{0}'".format(value)
         )
+        alter_commands.append(set_default_command)
 
-        alter_commands.append(alter_command)
-
-    with get_cursor() as c:
-        for command in alter_commands:
-            c.execute(command)
+        with get_cursor() as c:
+            for command in alter_commands:
+                c.execute(command)
 
 
 def update_definition_fields(table_name, fields):
