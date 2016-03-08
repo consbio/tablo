@@ -492,7 +492,7 @@ def create_database_table(row, dataset_id, append=False):
         )
         type_conversion = {
             'decimal': 'double precision',
-            'date': 'timestamp',
+            'date': 'date',
             'integer': 'integer',
             'string': 'text',
             'xlocation': 'double precision',
