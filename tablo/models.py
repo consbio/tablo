@@ -4,6 +4,7 @@ import logging
 import re
 import uuid
 import sqlparse
+from datetime import date, datetime
 
 from django.conf import settings
 from django.db import models, DatabaseError, connection
@@ -22,15 +23,18 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'TextField': 'esriFieldTypeString',
     'FloatField': 'esriFieldTypeDouble',
     'DateField': 'esriFieldTypeString',
+    'DateTimeField': 'esriFieldTypeString',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID'
 }
 
 IMPORT_SUFFIX = '_import'
-PRIMARY_KEY_NAME = 'db_id'
 TABLE_NAME_PREFIX = 'db_'
+PRIMARY_KEY_NAME = 'db_id'
 POINT_FIELD_NAME = 'dbasin_geom'
+CREATOR_FIELD_NAME = 'db_creator'
+CREATED_FIELD_NAME = 'db_created_date'
 SOURCE_DATASET_FIELD_NAME = 'source_dataset'
 WEB_MERCATOR_SRID = 3857
 
@@ -409,15 +413,57 @@ def delete_data_table(sender, instance, **kwargs):
 signals.pre_delete.connect(delete_data_table, sender=FeatureServiceLayer)
 
 
+def sequence_exists(sequence_name):
+    with get_cursor() as c:
+        c.execute('SELECT 1 FROM pg_class WHERE relname=%s', (sequence_name,))
+        return bool(c.fetchone())
+
+
 def copy_data_table_for_import(dataset_id):
 
+    import_table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+    counter = 0
+
+    # Find the first non-used sequence for this import table
+    sequence_name = '{0}_{1}_seq'.format(import_table_name, counter)
+    while sequence_exists(sequence_name):
+        counter += 1
+        sequence_name = '{0}_{1}_seq'.format(import_table_name, counter)
+
     drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(
-        table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+        table_name=import_table_name
     )
     copy_table_command = 'CREATE TABLE {import_table} AS TABLE {data_table}'.format(
-        import_table = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
-        data_table = TABLE_NAME_PREFIX + dataset_id
+        import_table=import_table_name,
+        data_table=TABLE_NAME_PREFIX + dataset_id
     )
+
+    # Creating a table based on another table does not pull over primary key information or indexes, nor does
+    # it create a sequence for the primary key. Need to do that by hand.
+
+    create_sequence_command = 'CREATE SEQUENCE {sequence_name}'.format(sequence_name=sequence_name)
+
+    alter_table_command = (
+        'ALTER TABLE {import_table} ADD PRIMARY KEY ({primary_key}), '
+        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')').format(
+            import_table=import_table_name,
+            primary_key=PRIMARY_KEY_NAME,
+            sequence_name=sequence_name
+        )
+
+    alter_sequence_command = 'ALTER SEQUENCE {sequence_name} owned by {import_table}.{primary_key}'.format(
+        import_table=import_table_name,
+        primary_key=PRIMARY_KEY_NAME,
+        sequence_name=sequence_name
+    )
+
+    alter_sequence_start_command = (
+        'SELECT setval(\'{sequence_name}\', (select max({primary_key})+1 '
+        'from {import_table}), false)').format(
+            import_table=import_table_name,
+            primary_key=PRIMARY_KEY_NAME,
+            sequence_name=sequence_name
+        )
 
     index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
         table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
@@ -427,42 +473,56 @@ def copy_data_table_for_import(dataset_id):
     with get_cursor() as c:
         c.execute(drop_table_command)
         c.execute(copy_table_command)
+        c.execute(create_sequence_command)
+        c.execute(alter_table_command)
+        c.execute(alter_sequence_command)
+        c.execute(alter_sequence_start_command)
         c.execute(index_command)
 
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
 
-def create_database_table(row, dataset_id):
+def create_database_table(row, dataset_id, append=False):
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
-    drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
-    create_table_command = 'CREATE TABLE {table_name} ({primary_key} serial NOT NULL PRIMARY KEY'.format(
-        table_name=table_name,
-        primary_key=PRIMARY_KEY_NAME
-    )
-    type_conversion = {
-        'decimal': 'double precision',
-        'date': 'date',
-        'integer': 'integer',
-        'string': 'text',
-        'xlocation': 'double precision',
-        'ylocation': 'double precision',
-        'dropdownedit': 'text',
-        'dropdown': 'text',
-        'double': 'double precision'
-    }
-    for cell in row:
-        create_table_command += ', {field_name} {type}'.format(
-            field_name=cell.column,
-            type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
+    if not append:
+        drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
+        create_table_command = 'CREATE TABLE {table_name} ({primary_key} serial NOT NULL PRIMARY KEY'.format(
+            table_name=table_name,
+            primary_key=PRIMARY_KEY_NAME
         )
-    create_table_command += ');'
+        type_conversion = {
+            'decimal': 'double precision',
+            'date': 'date',
+            'integer': 'integer',
+            'string': 'text',
+            'xlocation': 'double precision',
+            'ylocation': 'double precision',
+            'dropdownedit': 'text',
+            'dropdown': 'text',
+            'double': 'double precision'
+        }
+        for cell in row:
+            create_table_command += ', {field_name} {type}'.format(
+                field_name=cell.column,
+                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
+            )
+        create_table_command += ', {field_name} {type}'.format(
+            field_name=CREATOR_FIELD_NAME,
+            type='text'
+        )
+        create_table_command += ', {field_name} {type}'.format(
+            field_name=CREATED_FIELD_NAME,
+            type='timestamp'
+        )
 
-    try:
-        with get_cursor() as c:
-            c.execute(drop_table_command)
-            c.execute(create_table_command)
-    except DatabaseError:
-        raise
+        create_table_command += ');'
+
+        try:
+            with get_cursor() as c:
+                c.execute(drop_table_command)
+                c.execute(create_table_command)
+        except DatabaseError:
+            raise
 
     return table_name
 
@@ -507,41 +567,92 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             c.execute(command)
 
 
-def populate_data(table_name, row_set):
+def populate_data(table_name, row_set, creator):
     first_row = next(row_set.sample)
+    field_list = '{field_list},{creator_field},{created_field}'.format(
+        field_list=','.join([cell.column for cell in first_row]),
+        creator_field=CREATOR_FIELD_NAME,
+        created_field=CREATED_FIELD_NAME
+    )
     insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
         table_name=table_name,
-        field_list=','.join([cell.column for cell in first_row])
+        field_list=field_list
     )
 
     with get_cursor() as c:
         header_skipped = False
-        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
+        value_list = '{values},%s,%s'.format(
+            values=','.join(['%s' for cell in first_row])
+        )
+        values_parenthetical = '({values})'.format(values=value_list)
         values_list = []
         for row in row_set:
             if not header_skipped:
                 header_skipped = True
                 continue
-            individual_insert_command = c.mogrify(values_parenthetical, [cell.value for cell in row]).decode('utf-8')
+            all_values = [cell.value for cell in row]
+            all_values.append(creator)
+            all_values.append(datetime.utcnow())
+            individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
             values_list.append(individual_insert_command)
 
         c.execute(insert_command + ','.join(values_list))
 
 
-def add_definition_fields(table_name, fields):
+def add_database_fields(table_name, fields):
+    alter_commands = []
+    for field in fields:
+        db_type = field.get('type')
+        column_name = field.get('name')
+        required = field.get('required', False)
+        value = field.get('value')
 
+        check_command = ('SELECT EXISTS('
+                         'SELECT column_name FROM information_schema.columns '
+                         'WHERE table_name=%s and column_name=%s)')
+        with get_cursor() as c:
+            c.execute(check_command, (table_name, column_name))
+            column_exists = bool(c.fetchone)
+
+        if column_exists:
+            logger.info('Column {column_name} already exists in table {table_name}'.format(
+                table_name=table_name,
+                column_name=column_name
+            ))
+        else:
+            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {db_type}{not_null}'.format(
+                table_name=table_name,
+                column_name=column_name,
+                db_type=db_type,
+                not_null=' NOT NULL' if required else '',
+
+            )
+
+            alter_commands.append(alter_command)
+
+        set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
+            table_name=table_name,
+            column_name=column_name,
+            value=value if db_type != 'text' else "'{0}'".format(value)
+        )
+        alter_commands.append(set_default_command)
+
+        with get_cursor() as c:
+            for command in alter_commands:
+                c.execute(command)
+
+
+def update_definition_fields(table_name, fields):
     alter_commands = []
     for field in fields:
         db_type = field.get('type')
         name = field.get('name')
-        required = field.get('required', False)
         value = field.get('value')
 
-        alter_command = 'ALTER TABLE {table_name} ADD COLUMN {field_name} {db_type}{not_null} DEFAULT {value}'.format(
+        alter_command = 'ALTER TABLE {table_name} ALTER COLUMN {field_name} SET DEFAULT {value}'.format(
             table_name=table_name,
             field_name=name,
             db_type=db_type,
-            not_null=' NOT NULL' if required else '',
             value=value if db_type != 'text' else "'{0}'".format(value)
         )
 
