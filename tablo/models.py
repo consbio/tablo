@@ -22,6 +22,7 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'TextField': 'esriFieldTypeString',
     'FloatField': 'esriFieldTypeDouble',
     'DateField': 'esriFieldTypeString',
+    'DateTimeField': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID'
@@ -170,7 +171,7 @@ class FeatureServiceLayer(models.Model):
                     'alias': field_info.name,
                     'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
                     'nullable': field_info.null_ok,
-                    'editable': False
+                    'editable': True
                 })
 
         return fields
@@ -192,6 +193,7 @@ class FeatureServiceLayer(models.Model):
         end_time = kwargs.get('end_time')
         extent = kwargs.get('extent')
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
+        object_ids = kwargs.get('object_ids', [])
         return_fields = kwargs.get('return_fields', [])
         return_geometry = kwargs.get('return_geometry', True)
         only_return_count = kwargs.get('only_return_count', False)
@@ -229,6 +231,14 @@ class FeatureServiceLayer(models.Model):
                 layer_time_field=self.start_time_field,
                 table=self.table
             )
+
+        if object_ids:
+            where += ' AND {primary_key} IN ({object_id_list})'.format(
+                primary_key=PRIMARY_KEY_NAME,
+                object_id_list=','.join(['%s' for obj_id in object_ids]),
+            )
+            for obj_id in object_ids:
+                params.append(obj_id)
 
         if extent:
             where += ' AND ST_Intersects(dbasin_geom, ST_GeomFromText(%s, 3857)) '
@@ -399,6 +409,114 @@ class FeatureServiceLayer(models.Model):
             values[-1] = maximum
 
         return get_jenks_breaks(values, break_count)
+
+    def add_feature(self, feature):
+
+        with get_cursor() as c:
+            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
+                dataset_table_name=self.table
+            ))
+            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME, 'db_creator', 'db_created_date']]
+
+        columns_not_present = colnames_in_table[0:]
+
+        columns_in_request = feature['attributes'].copy()
+        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME, 'db_created_date', 'db_creator']:
+            if field in columns_in_request:
+                columns_in_request.pop(field)
+
+        for key in columns_in_request:
+            if key not in colnames_in_table:
+                print('non matching key', key)
+                raise Exception('attributes do not match')
+            columns_not_present.remove(key)
+
+        if len(columns_not_present):
+            raise Exception('Missing attributes {0}'.format(','.join(columns_not_present)))
+
+        insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
+            dataset_table_name=self.table,
+            attribute_names=','.join(colnames_in_table),
+            placeholders=','.join(['%s' for name in colnames_in_table]),
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(
+            dataset_table_name=self.table,
+            point_column=POINT_FIELD_NAME,
+            long=feature['geometry']['x'],
+            lat=feature['geometry']['y'],
+            primary_key=PRIMARY_KEY_NAME,
+            web_srid=WEB_MERCATOR_SRID
+        )
+
+        with get_cursor() as c:
+            c.execute(insert_command, [feature['attributes'][name] for name in colnames_in_table])
+            primary_key = c.fetchone()[0]
+            c.execute(set_point_command, [primary_key])
+
+        return primary_key
+
+    def update_feature(self, feature):
+
+        with get_cursor() as c:
+            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
+                dataset_table_name=self.table
+            ))
+            colnames_in_table = [desc[0].lower() for desc in c.description]
+
+        if PRIMARY_KEY_NAME not in feature['attributes']:
+            raise Exception('Cannot update feature without a primary key')
+
+        primary_key = feature['attributes'][PRIMARY_KEY_NAME]
+
+        argument_updates = []
+        argument_values = []
+        for key in feature['attributes']:
+            if key == PRIMARY_KEY_NAME:
+                continue
+            if key not in colnames_in_table:
+                raise Exception('attributes do not match')
+            if key != POINT_FIELD_NAME:
+                argument_updates.append('{0} = %s'.format(key))
+                argument_values.append(feature['attributes'][key])
+
+        if feature['geometry']:
+            set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), 3857),{web_srid}) WHERE {primary_key}=%s'.format(
+                dataset_table_name=self.table,
+                point_column=POINT_FIELD_NAME,
+                long=feature['geometry']['x'],
+                lat=feature['geometry']['y'],
+                primary_key=PRIMARY_KEY_NAME,
+                web_srid=WEB_MERCATOR_SRID
+            )
+
+        argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
+        update_command = ('UPDATE {dataset_table_name}'
+                         ' SET {set_portion}'
+                         ' WHERE {primary_key}=%s').format(
+            dataset_table_name=self.table,
+            set_portion=','.join(argument_updates),
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        with get_cursor() as c:
+            c.execute(update_command, argument_values)
+            c.execute(set_point_command, [primary_key])
+
+        return primary_key
+
+    def delete_feature(self, primary_key):
+
+        delete_command = 'DELETE FROM {table_name} WHERE {primary_key}=%s'.format(
+            table_name=self.table,
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        with get_cursor() as c:
+            c.execute(delete_command, [primary_key])
+
+        return primary_key
 
 
 def delete_data_table(sender, instance, **kwargs):
@@ -626,7 +744,6 @@ def determine_extent(table):
             extent = ADJUSTED_GLOBAL_EXTENT
 
         return extent.as_dict()
-
 
 def get_cursor():
     return connection.cursor()

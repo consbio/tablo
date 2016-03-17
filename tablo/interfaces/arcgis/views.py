@@ -2,7 +2,7 @@ import json
 import time
 import re
 
-from django.http import HttpResponse, Http404, HttpResponseBadRequest
+from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -76,7 +76,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'types': [],
             'templates': [],
             'type': 'Feature Layer',
-            'capabilities': 'Query',
+            'capabilities': 'Query,Create,Delete,Update,Editing',
             'currentVersion': 10.2,
             'maxRecordCount': 10000,
             'minScale': 0,
@@ -138,6 +138,17 @@ class FeatureLayerView(View):
     def post(self, request, *args, **kwargs):
         self.callback = request.POST.get('callback')
         return self.handle_request(request, **request.POST.dict())
+
+
+class FeatureLayerPostView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+        """This method is called in response to either a GET or POST with GET or POST data respectively"""
+
+        raise NotImplementedError
+
+    def get(self, request, *args, **kwargs):
+        return HttpResponseNotAllowed(['POST'])
 
 
 class GenerateRendererView(FeatureLayerView):
@@ -203,6 +214,9 @@ class QueryView(FeatureLayerView):
             search_params['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(end_time)/1000))
 
         search_params['out_sr'] = kwargs.get('outSR')
+
+        if 'objectIds' in kwargs:
+            search_params['object_ids'] = kwargs.get('objectIds', '').split(',')
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
@@ -322,3 +336,169 @@ def json_date_serializer(obj):
         return serial
     return json.JSONEncoder.default(obj)
 
+
+class AddFeaturesView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+
+        features = json.loads(kwargs.get('features', []))
+        rollback_on_failure = kwargs.get('rollbackOnFailure', True)
+
+        response_obj = []
+        for feature in features:
+            try:
+                object_id = self.feature_service_layer.add_feature(feature)
+                response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error adding feature: ' + str(e)
+                    }
+                })
+
+        content = json.dumps({'addResults': response_obj}, default=json_date_serializer)
+        content_type = 'application/json'
+        if self.callback:
+            content = '{callback}({data})'.format(callback=self.callback, data=content)
+            content_type = 'text/javascript'
+
+        return HttpResponse(content=content, content_type=content_type)
+
+
+class UpdateFeaturesView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+        features = json.loads(kwargs.get('features', []))
+        rollback_on_failure = kwargs.get('rollbackOnFailure', True)
+
+        response_obj = []
+        for feature in features:
+            try:
+                object_id = self.feature_service_layer.update_feature(feature)
+                response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error updating feature: ' + str(e)
+                    }
+                })
+
+        content = json.dumps({'editResults': response_obj}, default=json_date_serializer)
+        content_type = 'application/json'
+        if self.callback:
+            content = '{callback}({data})'.format(callback=self.callback, data=content)
+            content_type = 'text/javascript'
+
+        return HttpResponse(content=content, content_type=content_type)
+
+
+class DeleteFeaturesView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+
+        response_obj = []
+        for object_id in kwargs['objectIds'].split(','):
+            try:
+                object_id = self.feature_service_layer.delete_feature(object_id)
+                response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error deleting feature: ' + str(e)
+                    }
+                })
+
+        content = json.dumps({'deleteResponse': response_obj}, default=json_date_serializer)
+        content_type = 'application/json'
+        if self.callback:
+            content = '{callback}({data})'.format(callback=self.callback, data=content)
+            content_type = 'text/javascript'
+
+        return HttpResponse(content=content, content_type=content_type)
+
+
+class ApplyEditsView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+        adds = json.loads(kwargs.get('adds', '[]'))
+        updates = json.loads(kwargs.get('updates', '[]'))
+        delete_list = kwargs.get('deletes', None)
+        deletes = str(delete_list).split(',') if delete_list else []
+
+        add_response_obj = []
+        for feature in adds:
+            try:
+                object_id = self.feature_service_layer.add_feature(feature)
+                add_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                add_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error adding feature: ' + str(e)
+                    }
+                })
+
+        update_response_obj = []
+        for feature in updates:
+            try:
+                object_id = self.feature_service_layer.update_feature(feature)
+                update_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                update_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error updating feature: ' + str(e)
+                    }
+                })
+
+        delete_response_obj = []
+        for object_id in deletes:
+            try:
+                object_id = self.feature_service_layer.delete_feature(object_id)
+                delete_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                delete_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error deleting feature: ' + str(e)
+                    }
+                })
+
+        content = json.dumps({
+            'addResults': add_response_obj,
+            'updateResults': update_response_obj,
+            'deleteResults': delete_response_obj
+        }, default=json_date_serializer)
+        content_type = 'application/json'
+        if self.callback:
+            content = '{callback}({data})'.format(callback=self.callback, data=content)
+            content_type = 'text/javascript'
+
+        return HttpResponse(content=content, content_type=content_type)
