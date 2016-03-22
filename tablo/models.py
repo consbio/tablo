@@ -33,8 +33,6 @@ IMPORT_SUFFIX = '_import'
 TABLE_NAME_PREFIX = 'db_'
 PRIMARY_KEY_NAME = 'db_id'
 POINT_FIELD_NAME = 'dbasin_geom'
-CREATOR_FIELD_NAME = 'db_creator'
-CREATED_FIELD_NAME = 'db_created_date'
 SOURCE_DATASET_FIELD_NAME = 'source_dataset'
 WEB_MERCATOR_SRID = 3857
 
@@ -634,14 +632,6 @@ def create_database_table(row, dataset_id, append=False):
                 field_name=cell.column,
                 type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
             )
-        create_table_command += ', {field_name} {type}'.format(
-            field_name=CREATOR_FIELD_NAME,
-            type='text'
-        )
-        create_table_command += ', {field_name} {type}'.format(
-            field_name=CREATED_FIELD_NAME,
-            type='timestamp'
-        )
 
         create_table_command += ');'
 
@@ -695,12 +685,10 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             c.execute(command)
 
 
-def populate_data(table_name, row_set, creator):
+def populate_data(table_name, row_set):
     first_row = next(row_set.sample)
-    field_list = '{field_list},{creator_field},{created_field}'.format(
-        field_list=','.join([cell.column for cell in first_row]),
-        creator_field=CREATOR_FIELD_NAME,
-        created_field=CREATED_FIELD_NAME
+    field_list = '{field_list}'.format(
+        field_list=','.join([cell.column for cell in first_row])
     )
     insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
         table_name=table_name,
@@ -709,18 +697,13 @@ def populate_data(table_name, row_set, creator):
 
     with get_cursor() as c:
         header_skipped = False
-        value_list = '{values},%s,%s'.format(
-            values=','.join(['%s' for cell in first_row])
-        )
-        values_parenthetical = '({values})'.format(values=value_list)
+        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
         values_list = []
         for row in row_set:
             if not header_skipped:
                 header_skipped = True
                 continue
             all_values = [cell.value for cell in row]
-            all_values.append(creator)
-            all_values.append(datetime.utcnow())
             individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
             values_list.append(individual_insert_command)
 
@@ -728,8 +711,9 @@ def populate_data(table_name, row_set, creator):
 
 
 def add_database_fields(table_name, fields):
-    alter_commands = []
+
     for field in fields:
+        alter_commands = []
         db_type = field.get('type')
         column_name = field.get('name')
         required = field.get('required', False)
@@ -752,7 +736,7 @@ def add_database_fields(table_name, fields):
             set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
                 table_name=table_name,
                 column_name=column_name,
-                value=value if db_type != 'text' else "'{0}'".format(value)
+                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
             )
             alter_commands.append(set_default_command)
 
@@ -762,17 +746,16 @@ def add_database_fields(table_name, fields):
                 column_name=column_name,
                 db_type=db_type,
                 not_null=' NOT NULL' if required else '',
-                value=value if db_type != 'text' else "'{0}'".format(value)
+                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
             )
 
             alter_commands.append(alter_command)
-
         with get_cursor() as c:
             for command in alter_commands:
                 c.execute(command)
 
 
-def update_definition_fields(table_name, fields):
+def update_extra_fields(table_name, fields):
     alter_commands = []
     for field in fields:
         db_type = field.get('type')
@@ -782,8 +765,7 @@ def update_definition_fields(table_name, fields):
         alter_command = 'ALTER TABLE {table_name} ALTER COLUMN {field_name} SET DEFAULT {value}'.format(
             table_name=table_name,
             field_name=name,
-            db_type=db_type,
-            value=value if db_type != 'text' else "'{0}'".format(value)
+            value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
         )
 
         alter_commands.append(alter_command)

@@ -19,7 +19,7 @@ from tastypie.utils import trailing_slash
 from tablo import csv_utils
 from tablo.csv_utils import determine_x_and_y_fields
 from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data
-from tablo.models import add_point_column, populate_point_data, copy_data_table_for_import, update_definition_fields
+from tablo.models import add_point_column, populate_point_data, copy_data_table_for_import, update_extra_fields
 from tablo.models import create_aggregate_database_table, populate_aggregate_table, add_database_fields, Column
 
 logger = logging.getLogger(__name__)
@@ -217,12 +217,11 @@ class TemporaryFileResource(ModelResource):
 
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
-            creator = request.POST.get('creator_id')
 
             row_set = csv_utils.prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id)
-            populate_data(table_name, row_set, creator)
+            populate_data(table_name, row_set)
 
             add_database_fields(table_name, additional_fields)
 
@@ -250,14 +249,13 @@ class TemporaryFileResource(ModelResource):
 
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
-            creator = request.POST.get('creator_id')
 
             row_set = csv_utils.prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, append=True)
 
-            update_definition_fields(table_name, additional_fields)
-            populate_data(table_name, row_set, creator)
+            update_extra_fields(table_name, additional_fields)
+            populate_data(table_name, row_set)
 
             bundle.data['table_name'] = table_name
 
