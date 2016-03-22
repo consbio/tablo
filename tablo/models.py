@@ -22,7 +22,7 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'IntegerField': 'esriFieldTypeInteger',
     'TextField': 'esriFieldTypeString',
     'FloatField': 'esriFieldTypeDouble',
-    'DateField': 'esriFieldTypeString',
+    'DateField': 'esriFieldTypeDate',
     'DateTimeField': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
@@ -430,7 +430,6 @@ class FeatureServiceLayer(models.Model):
 
         for key in columns_in_request:
             if key not in colnames_in_table:
-                print('non matching key', key)
                 raise Exception('attributes do not match')
             columns_not_present.remove(key)
 
@@ -453,8 +452,16 @@ class FeatureServiceLayer(models.Model):
             web_srid=WEB_MERCATOR_SRID
         )
 
+        date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        values = []
+        for attribute_name in colnames_in_table:
+            if attribute_name in date_fields:
+                values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
+            else:
+                values.append(feature['attributes'][attribute_name])
+
         with get_cursor() as c:
-            c.execute(insert_command, [feature['attributes'][name] for name in colnames_in_table])
+            c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
             c.execute(set_point_command, [primary_key])
 
@@ -473,6 +480,7 @@ class FeatureServiceLayer(models.Model):
 
         primary_key = feature['attributes'][PRIMARY_KEY_NAME]
 
+        date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         argument_updates = []
         argument_values = []
         for key in feature['attributes']:
@@ -482,7 +490,10 @@ class FeatureServiceLayer(models.Model):
                 raise Exception('attributes do not match')
             if key != POINT_FIELD_NAME:
                 argument_updates.append('{0} = %s'.format(key))
-                argument_values.append(feature['attributes'][key])
+                if key in date_fields:
+                    argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
+                else:
+                    argument_values.append(feature['attributes'][key])
 
         if feature['geometry']:
             set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), 3857),{web_srid}) WHERE {primary_key}=%s'.format(
@@ -729,30 +740,32 @@ def add_database_fields(table_name, fields):
                          'WHERE table_name=%s and column_name=%s)')
         with get_cursor() as c:
             c.execute(check_command, (table_name, column_name))
-            column_exists = bool(c.fetchone)
+            column_exists = c.fetchone()[0]
+            print(column_exists)
 
         if column_exists:
             logger.info('Column {column_name} already exists in table {table_name}'.format(
                 table_name=table_name,
                 column_name=column_name
             ))
+
+            set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
+                table_name=table_name,
+                column_name=column_name,
+                value=value if db_type != 'text' else "'{0}'".format(value)
+            )
+            alter_commands.append(set_default_command)
+
         else:
-            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {db_type}{not_null}'.format(
+            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {db_type}{not_null} DEFAULT {value}'.format(
                 table_name=table_name,
                 column_name=column_name,
                 db_type=db_type,
                 not_null=' NOT NULL' if required else '',
-
+                value=value if db_type != 'text' else "'{0}'".format(value)
             )
 
             alter_commands.append(alter_command)
-
-        set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
-            table_name=table_name,
-            column_name=column_name,
-            value=value if db_type != 'text' else "'{0}'".format(value)
-        )
-        alter_commands.append(set_default_command)
 
         with get_cursor() as c:
             for command in alter_commands:
