@@ -2,7 +2,6 @@ from django.conf.urls import patterns, include, url
 
 from tablo.interfaces.arcgis.views import FeatureServiceDetailView, FeatureServiceLayerDetailView, GenerateRendererView
 from tablo.interfaces.arcgis.views import QueryView, TimeQueryView
-from tablo.interfaces.arcgis.views import AddFeaturesView, UpdateFeaturesView, DeleteFeaturesView, ApplyEditsView
 
 urlpatterns = patterns('',
     url(r'rest/services/(?P<service_id>[\w\-@\._]+)/FeatureServer/?', include(patterns('',
