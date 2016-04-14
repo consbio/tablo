@@ -453,8 +453,11 @@ class FeatureServiceLayer(models.Model):
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         values = []
         for attribute_name in colnames_in_table:
-            if attribute_name in date_fields:
-                values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
+            if attribute_name in date_fields and feature['attributes'][attribute_name]:
+                if isinstance(feature['attributes'][attribute_name], str):
+                    values.append(feature['attributes'][attribute_name])
+                else:
+                    values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
             else:
                 values.append(feature['attributes'][attribute_name])
 
@@ -488,8 +491,11 @@ class FeatureServiceLayer(models.Model):
                 raise Exception('attributes do not match')
             if key != POINT_FIELD_NAME:
                 argument_updates.append('{0} = %s'.format(key))
-                if key in date_fields:
-                    argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
+                if key in date_fields and feature['attributes'][key]:
+                    if isinstance(feature['attributes'][key], str):
+                        argument_values.append(feature['attributes'][key])
+                    else:
+                        argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
                 else:
                     argument_values.append(feature['attributes'][key])
 
@@ -725,7 +731,6 @@ def add_database_fields(table_name, fields):
         with get_cursor() as c:
             c.execute(check_command, (table_name, column_name))
             column_exists = c.fetchone()[0]
-            print(column_exists)
 
         if column_exists:
             logger.info('Column {column_name} already exists in table {table_name}'.format(

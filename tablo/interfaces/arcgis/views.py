@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import re
 
@@ -12,6 +13,8 @@ from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureServiceDetailView(DetailView):
@@ -76,7 +79,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'types': [],
             'templates': [],
             'type': 'Feature Layer',
-            'capabilities': 'Query,Create,Delete,Update,Editing',
+            'capabilities': 'Query',
             'currentVersion': 10.2,
             'maxRecordCount': 10000,
             'minScale': 0,
@@ -335,170 +338,3 @@ def json_date_serializer(obj):
         serial = obj.isoformat()
         return serial
     return json.JSONEncoder.default(obj)
-
-
-class AddFeaturesView(FeatureLayerView):
-
-    def handle_request(self, request, **kwargs):
-
-        features = json.loads(kwargs.get('features', []))
-        rollback_on_failure = kwargs.get('rollbackOnFailure', True)
-
-        response_obj = []
-        for feature in features:
-            try:
-                object_id = self.feature_service_layer.add_feature(feature)
-                response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error adding feature: ' + str(e)
-                    }
-                })
-
-        content = json.dumps({'addResults': response_obj}, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
-
-        return HttpResponse(content=content, content_type=content_type)
-
-
-class UpdateFeaturesView(FeatureLayerView):
-
-    def handle_request(self, request, **kwargs):
-        features = json.loads(kwargs.get('features', []))
-        rollback_on_failure = kwargs.get('rollbackOnFailure', True)
-
-        response_obj = []
-        for feature in features:
-            try:
-                object_id = self.feature_service_layer.update_feature(feature)
-                response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error updating feature: ' + str(e)
-                    }
-                })
-
-        content = json.dumps({'editResults': response_obj}, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
-
-        return HttpResponse(content=content, content_type=content_type)
-
-
-class DeleteFeaturesView(FeatureLayerView):
-
-    def handle_request(self, request, **kwargs):
-
-        response_obj = []
-        for object_id in kwargs['objectIds'].split(','):
-            try:
-                object_id = self.feature_service_layer.delete_feature(object_id)
-                response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error deleting feature: ' + str(e)
-                    }
-                })
-
-        content = json.dumps({'deleteResponse': response_obj}, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
-
-        return HttpResponse(content=content, content_type=content_type)
-
-
-class ApplyEditsView(FeatureLayerView):
-
-    def handle_request(self, request, **kwargs):
-        adds = json.loads(kwargs.get('adds', '[]'))
-        updates = json.loads(kwargs.get('updates', '[]'))
-        delete_list = kwargs.get('deletes', None)
-        deletes = str(delete_list).split(',') if delete_list else []
-
-        add_response_obj = []
-        for feature in adds:
-            try:
-                object_id = self.feature_service_layer.add_feature(feature)
-                add_response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                add_response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error adding feature: ' + str(e)
-                    }
-                })
-
-        update_response_obj = []
-        for feature in updates:
-            try:
-                object_id = self.feature_service_layer.update_feature(feature)
-                update_response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                update_response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error updating feature: ' + str(e)
-                    }
-                })
-
-        delete_response_obj = []
-        for object_id in deletes:
-            try:
-                object_id = self.feature_service_layer.delete_feature(object_id)
-                delete_response_obj.append({
-                    'objectId': object_id,
-                    'success': True
-                })
-            except Exception as e:
-                delete_response_obj.append({
-                    'success': False,
-                    'error': {
-                        'code': -999999,
-                        'description': 'Error deleting feature: ' + str(e)
-                    }
-                })
-
-        content = json.dumps({
-            'addResults': add_response_obj,
-            'updateResults': update_response_obj,
-            'deleteResults': delete_response_obj
-        }, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
-
-        return HttpResponse(content=content, content_type=content_type)

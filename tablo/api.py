@@ -58,6 +58,11 @@ class FeatureServiceResource(ModelResource):
                 r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine_tables'.format(
                     self._meta.resource_name
                 ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
+            ),
+            url(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply_edits'.format(
+                    self._meta.resource_name
+                ), self.wrap_view('apply_edits'), name="api_featureservice_apply_edits"
             )
         ]
 
@@ -119,6 +124,79 @@ class FeatureServiceResource(ModelResource):
         service.save()
 
         return self.create_response(request, {'table_name': table_name})
+
+    def apply_edits(self, request, **kwargs):
+
+        try:
+            service = FeatureService.objects.get(id=kwargs['service_id'])
+        except ObjectDoesNotExist:
+            return Http404()
+
+        adds = json.loads(request.POST.get('adds', '[]'))
+        updates = json.loads(request.POST.get('updates', '[]'))
+        delete_list = request.POST.get('deletes', None)
+        deletes = str(delete_list).split(',') if delete_list else []
+
+        add_response_obj = []
+        feature_service_layer = service.featureservicelayer_set.first()
+        for feature in adds:
+            try:
+                object_id = feature_service_layer.add_feature(feature)
+                add_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                add_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error adding feature: ' + str(e)
+                    }
+                })
+
+        update_response_obj = []
+        for feature in updates:
+            try:
+                object_id = feature_service_layer.update_feature(feature)
+                update_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                update_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error updating feature: ' + str(e)
+                    }
+                })
+
+        delete_response_obj = []
+        for object_id in deletes:
+            try:
+                object_id = feature_service_layer.delete_feature(object_id)
+                delete_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                delete_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error deleting feature: ' + str(e)
+                    }
+                })
+
+        return self.create_response(request, {
+            'addResults': add_response_obj,
+            'updateResults': update_response_obj,
+            'deleteResults': delete_response_obj
+        })
 
 
 class FeatureServiceLayerResource(ModelResource):
@@ -266,3 +344,12 @@ class TemporaryFileResource(ModelResource):
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
+
+
+def json_date_serializer(obj):
+    # Handles date serialization when part of the response object
+
+    if hasattr(obj, 'isoformat'):
+        serial = obj.isoformat()
+        return serial
+    return json.JSONEncoder.default(obj)

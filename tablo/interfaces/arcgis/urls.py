@@ -12,10 +12,6 @@ urlpatterns = patterns('',
             url(r'^generateRenderer', GenerateRendererView.as_view(), name='fs_arcgis_generateRenderer'),
             url(r'^query', QueryView.as_view(), name='fs_arcgis_query'),
             url(r'^time-query', TimeQueryView.as_view(), name='fs_arcgis_time_query'),
-            url(r'^addFeatures', AddFeaturesView.as_view(), name='add_features'),
-            url(r'^updateFeatures', UpdateFeaturesView.as_view(), name='fs_arcgis_time_query'),
-            url(r'^deleteFeatures', DeleteFeaturesView.as_view(), name='fs_arcgis_time_query'),
-            url(r'^applyEdits', ApplyEditsView.as_view(), name='fs_arcgis_time_query'),
         )))
     )))
 )
