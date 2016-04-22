@@ -18,12 +18,12 @@ from tablo.geom_utils import Extent, SpatialReference
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
-    'BigIntegerField': 'esriFieldTypeInteger',
-    'IntegerField': 'esriFieldTypeInteger',
-    'TextField': 'esriFieldTypeString',
-    'FloatField': 'esriFieldTypeDouble',
-    'DateField': 'esriFieldTypeDate',
-    'DateTimeField': 'esriFieldTypeDate',
+    'bigint': 'esriFieldTypeInteger',
+    'integer': 'esriFieldTypeInteger',
+    'text': 'esriFieldTypeString',
+    'double precision': 'esriFieldTypeDouble',
+    'date': 'esriFieldTypeDate',
+    'timestamp without time zone': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID'
@@ -155,23 +155,20 @@ class FeatureServiceLayer(models.Model):
     def fields(self):
         fields = []
         with connection.cursor() as c:
-            c.execute('select * from {0} limit 1'.format(self.table))
+            c.execute('select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;', [self.table])
             # c.description won't be populated without first running the query above
-            for field_info in c.description:
-                if field_info.name == 'db_id':
+            for field_info in c.fetchall():
+                field_type = field_info[2]
+                if field_info[0] == 'db_id':
                     field_type = 'OID'
-                elif field_info.type_code in connection.introspection.data_types_reverse:
-                    field_type = connection.introspection.data_types_reverse[field_info.type_code]
-                elif field_info.name == POINT_FIELD_NAME:
+                elif field_info[0] == POINT_FIELD_NAME:
                     field_type = 'Geometry'
-                else:
-                    field_type = 'Unknown'
 
                 fields.append({
-                    'name': field_info.name,
-                    'alias': field_info.name,
+                    'name': field_info[0],
+                    'alias': field_info[0],
                     'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
-                    'nullable': field_info.null_ok,
+                    'nullable': True if field_info[1] == 'YES' else False,
                     'editable': True
                 })
 
@@ -614,7 +611,8 @@ def copy_data_table_for_import(dataset_id):
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
 
-def create_database_table(row, dataset_id, append=False):
+def create_database_table(row, dataset_id, append=False, optional_fields=None):
+    optional_fields = optional_fields or []
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
     if not append:
         drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
@@ -634,9 +632,10 @@ def create_database_table(row, dataset_id, append=False):
             'double': 'double precision'
         }
         for cell in row:
-            create_table_command += ', {field_name} {type}'.format(
+            create_table_command += ', {field_name} {type} {null}'.format(
                 field_name=cell.column,
-                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
+                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())],
+                null='NOT NULL' if cell.column not in optional_fields else ''
             )
 
         create_table_command += ');'

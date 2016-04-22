@@ -273,6 +273,7 @@ class TemporaryFileResource(ModelResource):
         sample_row = next(row_set.sample)
         bundle.data['fieldNames'] = [cell.column for cell in sample_row]
         bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
+        bundle.data['optionalFields'] = determine_optional_fields(row_set)
 
         x_field, y_field = determine_x_and_y_fields(sample_row)
         if x_field and y_field:
@@ -298,7 +299,7 @@ class TemporaryFileResource(ModelResource):
 
             row_set = csv_utils.prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
-            table_name = create_database_table(sample_row, dataset_id)
+            table_name = create_database_table(sample_row, dataset_id, optional_fields=determine_optional_fields(row_set))
             populate_data(table_name, row_set)
 
             add_database_fields(table_name, additional_fields)
@@ -353,3 +354,13 @@ def json_date_serializer(obj):
         serial = obj.isoformat()
         return serial
     return json.JSONEncoder.default(obj)
+
+
+def determine_optional_fields(row_set):
+
+    optional_fields = set([])
+    for row in row_set:
+        for cell in row:
+            if cell.empty:
+                optional_fields.add(cell.column)
+    return optional_fields
