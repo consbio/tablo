@@ -414,12 +414,12 @@ class FeatureServiceLayer(models.Model):
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
-            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME, 'db_creator', 'db_created_date']]
+            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]]
 
         columns_not_present = colnames_in_table[0:]
 
         columns_in_request = feature['attributes'].copy()
-        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME, 'db_created_date', 'db_creator']:
+        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]:
             if field in columns_in_request:
                 columns_in_request.pop(field)
 
