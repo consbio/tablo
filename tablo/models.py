@@ -715,7 +715,7 @@ def populate_data(table_name, row_set):
         c.execute(insert_command + ','.join(values_list))
 
 
-def add_database_fields(table_name, fields):
+def add_or_update_database_fields(table_name, fields):
 
     for field in fields:
         alter_commands = []
@@ -732,11 +732,6 @@ def add_database_fields(table_name, fields):
             column_exists = c.fetchone()[0]
 
         if column_exists:
-            logger.info('Column {column_name} already exists in table {table_name}'.format(
-                table_name=table_name,
-                column_name=column_name
-            ))
-
             set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
                 table_name=table_name,
                 column_name=column_name,
@@ -757,26 +752,6 @@ def add_database_fields(table_name, fields):
         with get_cursor() as c:
             for command in alter_commands:
                 c.execute(command)
-
-
-def update_extra_fields(table_name, fields):
-    alter_commands = []
-    for field in fields:
-        db_type = field.get('type')
-        name = field.get('name')
-        value = field.get('value')
-
-        alter_command = 'ALTER TABLE {table_name} ALTER COLUMN {field_name} SET DEFAULT {value}'.format(
-            table_name=table_name,
-            field_name=name,
-            value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
-        )
-
-        alter_commands.append(alter_command)
-
-    with get_cursor() as c:
-        for command in alter_commands:
-            c.execute(command)
 
 
 def add_point_column(dataset_id, is_import=True):
