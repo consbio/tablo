@@ -135,9 +135,8 @@ class FeatureServiceLayer(models.Model):
         if not self.supports_time:
             return '[]'
 
-        if self._time_extent is None:
-            self._time_extent = self._get_time_extent()
-        return self._time_extent
+        # TODO: Remove fields from database if we really don't want to continue using them
+        return self._get_time_extent()
 
     def _get_time_extent(self):
         query = 'SELECT MIN({date_field}), MAX({date_field}) FROM {table_name}'.format(
