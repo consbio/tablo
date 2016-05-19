@@ -138,7 +138,7 @@ class FeatureServiceLayer(models.Model):
         # TODO: Remove fields from database if we really don't want to continue using them
         return self._get_time_extent()
 
-    def _get_time_extent(self):
+    def get_raw_time_extent(self):
         query = 'SELECT MIN({date_field}), MAX({date_field}) FROM {table_name}'.format(
             date_field=self.start_time_field,
             table_name=self.table
@@ -148,7 +148,10 @@ class FeatureServiceLayer(models.Model):
             c.execute(query)
             min_date, max_date = (calendar.timegm(x.timetuple()) * 1000 for x in c.fetchone())
 
-        return json.dumps([min_date, max_date])
+        return [min_date, max_date]
+
+    def _get_time_extent(self):
+        return json.dumps(self.get_raw_time_extent())
 
     @property
     def fields(self):

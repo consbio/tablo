@@ -60,7 +60,7 @@ class FeatureServiceResource(ModelResource):
                 ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
             ),
             url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply_edits'.format(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply-edits'.format(
                     self._meta.resource_name
                 ), self.wrap_view('apply_edits'), name="api_featureservice_apply_edits"
             )
@@ -139,6 +139,7 @@ class FeatureServiceResource(ModelResource):
 
         add_response_obj = []
         feature_service_layer = service.featureservicelayer_set.first()
+        original_time_extent = feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
         for feature in adds:
             try:
                 object_id = feature_service_layer.add_feature(feature)
@@ -192,11 +193,19 @@ class FeatureServiceResource(ModelResource):
                     }
                 })
 
-        return self.create_response(request, {
+        response_obj = {
             'addResults': add_response_obj,
             'updateResults': update_response_obj,
             'deleteResults': delete_response_obj
-        })
+        }
+
+        if original_time_extent:
+            new_time_extent = feature_service_layer.get_raw_time_extent()
+            if (new_time_extent[0] != original_time_extent[0] or
+                new_time_extent[1] != original_time_extent[1]):
+                response_obj['new_time_extent'] = json.dumps(new_time_extent)
+
+        return self.create_response(request, response_obj)
 
 
 class FeatureServiceLayerResource(ModelResource):
