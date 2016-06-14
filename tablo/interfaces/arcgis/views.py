@@ -1,8 +1,9 @@
 import json
+import logging
 import time
 import re
 
-from django.http import HttpResponse, Http404, HttpResponseBadRequest
+from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -12,6 +13,8 @@ from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureServiceDetailView(DetailView):
@@ -140,6 +143,17 @@ class FeatureLayerView(View):
         return self.handle_request(request, **request.POST.dict())
 
 
+class FeatureLayerPostView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+        """This method is called in response to either a GET or POST with GET or POST data respectively"""
+
+        raise NotImplementedError
+
+    def get(self, request, *args, **kwargs):
+        return HttpResponseNotAllowed(['POST'])
+
+
 class GenerateRendererView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):
@@ -203,6 +217,9 @@ class QueryView(FeatureLayerView):
             search_params['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(end_time)/1000))
 
         search_params['out_sr'] = kwargs.get('outSR')
+
+        if 'objectIds' in kwargs:
+            search_params['object_ids'] = kwargs.get('objectIds', '').split(',')
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
@@ -321,4 +338,3 @@ def json_date_serializer(obj):
         serial = obj.isoformat()
         return serial
     return json.JSONEncoder.default(obj)
-

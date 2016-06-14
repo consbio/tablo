@@ -10,7 +10,7 @@ urlpatterns = patterns('',
             url(r'^$', FeatureServiceLayerDetailView.as_view(), name='fs_arcgis_featureservicelayer'),
             url(r'^generateRenderer', GenerateRendererView.as_view(), name='fs_arcgis_generateRenderer'),
             url(r'^query', QueryView.as_view(), name='fs_arcgis_query'),
-            url(r'^time-query', TimeQueryView.as_view(), name='fs_arcgis_time_query')
+            url(r'^time-query', TimeQueryView.as_view(), name='fs_arcgis_time_query'),
         )))
     )))
 )

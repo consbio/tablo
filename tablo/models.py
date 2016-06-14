@@ -18,12 +18,12 @@ from tablo.geom_utils import Extent, SpatialReference
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
-    'BigIntegerField': 'esriFieldTypeInteger',
-    'IntegerField': 'esriFieldTypeInteger',
-    'TextField': 'esriFieldTypeString',
-    'FloatField': 'esriFieldTypeDouble',
-    'DateField': 'esriFieldTypeDate',
-    'DateTimeField': 'esriFieldTypeDate',
+    'bigint': 'esriFieldTypeInteger',
+    'integer': 'esriFieldTypeInteger',
+    'text': 'esriFieldTypeString',
+    'double precision': 'esriFieldTypeDouble',
+    'date': 'esriFieldTypeDate',
+    'timestamp without time zone': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID'
@@ -135,11 +135,10 @@ class FeatureServiceLayer(models.Model):
         if not self.supports_time:
             return '[]'
 
-        if self._time_extent is None:
-            self._time_extent = self._get_time_extent()
-        return self._time_extent
+        # TODO: Remove fields from database if we really don't want to continue using them
+        return self._get_time_extent()
 
-    def _get_time_extent(self):
+    def get_raw_time_extent(self):
         query = 'SELECT MIN({date_field}), MAX({date_field}) FROM {table_name}'.format(
             date_field=self.start_time_field,
             table_name=self.table
@@ -149,30 +148,30 @@ class FeatureServiceLayer(models.Model):
             c.execute(query)
             min_date, max_date = (calendar.timegm(x.timetuple()) * 1000 for x in c.fetchone())
 
-        return json.dumps([min_date, max_date])
+        return [min_date, max_date]
+
+    def _get_time_extent(self):
+        return json.dumps(self.get_raw_time_extent())
 
     @property
     def fields(self):
         fields = []
         with connection.cursor() as c:
-            c.execute('select * from {0} limit 1'.format(self.table))
+            c.execute('select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;', [self.table])
             # c.description won't be populated without first running the query above
-            for field_info in c.description:
-                if field_info.name == 'db_id':
+            for field_info in c.fetchall():
+                field_type = field_info[2]
+                if field_info[0] == 'db_id':
                     field_type = 'OID'
-                elif field_info.type_code in connection.introspection.data_types_reverse:
-                    field_type = connection.introspection.data_types_reverse[field_info.type_code]
-                elif field_info.name == POINT_FIELD_NAME:
+                elif field_info[0] == POINT_FIELD_NAME:
                     field_type = 'Geometry'
-                else:
-                    field_type = 'Unknown'
 
                 fields.append({
-                    'name': field_info.name,
-                    'alias': field_info.name,
+                    'name': field_info[0],
+                    'alias': field_info[0],
                     'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
-                    'nullable': field_info.null_ok,
-                    'editable': False
+                    'nullable': True if field_info[1] == 'YES' else False,
+                    'editable': True
                 })
 
         return fields
@@ -194,6 +193,7 @@ class FeatureServiceLayer(models.Model):
         end_time = kwargs.get('end_time')
         extent = kwargs.get('extent')
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
+        object_ids = kwargs.get('object_ids', [])
         return_fields = kwargs.get('return_fields', [])
         return_geometry = kwargs.get('return_geometry', True)
         only_return_count = kwargs.get('only_return_count', False)
@@ -231,6 +231,14 @@ class FeatureServiceLayer(models.Model):
                 layer_time_field=self.start_time_field,
                 table=self.table
             )
+
+        if object_ids:
+            where += ' AND {primary_key} IN ({object_id_list})'.format(
+                primary_key=PRIMARY_KEY_NAME,
+                object_id_list=','.join(['%s' for obj_id in object_ids]),
+            )
+            for obj_id in object_ids:
+                params.append(obj_id)
 
         if extent:
             where += ' AND ST_Intersects(dbasin_geom, ST_GeomFromText(%s, 3857)) '
@@ -402,6 +410,131 @@ class FeatureServiceLayer(models.Model):
 
         return get_jenks_breaks(values, break_count)
 
+    def add_feature(self, feature):
+
+        with get_cursor() as c:
+            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
+                dataset_table_name=self.table
+            ))
+            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]]
+
+        columns_not_present = colnames_in_table[0:]
+
+        columns_in_request = feature['attributes'].copy()
+        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]:
+            if field in columns_in_request:
+                columns_in_request.pop(field)
+
+        for key in columns_in_request:
+            if key not in colnames_in_table:
+                raise Exception('attributes do not match')
+            columns_not_present.remove(key)
+
+        if len(columns_not_present):
+            raise Exception('Missing attributes {0}'.format(','.join(columns_not_present)))
+
+        insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
+            dataset_table_name=self.table,
+            attribute_names=','.join(colnames_in_table),
+            placeholders=','.join(['%s' for name in colnames_in_table]),
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(
+            dataset_table_name=self.table,
+            point_column=POINT_FIELD_NAME,
+            long=feature['geometry']['x'],
+            lat=feature['geometry']['y'],
+            primary_key=PRIMARY_KEY_NAME,
+            web_srid=WEB_MERCATOR_SRID
+        )
+
+        date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        values = []
+        for attribute_name in colnames_in_table:
+            if attribute_name in date_fields and feature['attributes'][attribute_name]:
+                if isinstance(feature['attributes'][attribute_name], str):
+                    values.append(feature['attributes'][attribute_name])
+                else:
+                    values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
+            else:
+                values.append(feature['attributes'][attribute_name])
+
+        with get_cursor() as c:
+            c.execute(insert_command, values)
+            primary_key = c.fetchone()[0]
+            c.execute(set_point_command, [primary_key])
+
+        return primary_key
+
+    def update_feature(self, feature):
+
+        with get_cursor() as c:
+            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
+                dataset_table_name=self.table
+            ))
+            colnames_in_table = [desc[0].lower() for desc in c.description]
+
+        if PRIMARY_KEY_NAME not in feature['attributes']:
+            raise Exception('Cannot update feature without a primary key')
+
+        primary_key = feature['attributes'][PRIMARY_KEY_NAME]
+
+        date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        argument_updates = []
+        argument_values = []
+        for key in feature['attributes']:
+            if key == PRIMARY_KEY_NAME:
+                continue
+            if key not in colnames_in_table:
+                raise Exception('attributes do not match')
+            if key != POINT_FIELD_NAME:
+                argument_updates.append('{0} = %s'.format(key))
+                if key in date_fields and feature['attributes'][key]:
+                    if isinstance(feature['attributes'][key], str):
+                        argument_values.append(feature['attributes'][key])
+                    else:
+                        argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
+                else:
+                    argument_values.append(feature['attributes'][key])
+
+        if feature['geometry']:
+            set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), 3857),{web_srid}) WHERE {primary_key}=%s'.format(
+                dataset_table_name=self.table,
+                point_column=POINT_FIELD_NAME,
+                long=feature['geometry']['x'],
+                lat=feature['geometry']['y'],
+                primary_key=PRIMARY_KEY_NAME,
+                web_srid=WEB_MERCATOR_SRID
+            )
+
+        argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
+        update_command = ('UPDATE {dataset_table_name}'
+                         ' SET {set_portion}'
+                         ' WHERE {primary_key}=%s').format(
+            dataset_table_name=self.table,
+            set_portion=','.join(argument_updates),
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        with get_cursor() as c:
+            c.execute(update_command, argument_values)
+            c.execute(set_point_command, [primary_key])
+
+        return primary_key
+
+    def delete_feature(self, primary_key):
+
+        delete_command = 'DELETE FROM {table_name} WHERE {primary_key}=%s'.format(
+            table_name=self.table,
+            primary_key=PRIMARY_KEY_NAME
+        )
+
+        with get_cursor() as c:
+            c.execute(delete_command, [primary_key])
+
+        return primary_key
+
 
 def delete_data_table(sender, instance, **kwargs):
     with get_cursor() as c:
@@ -480,7 +613,8 @@ def copy_data_table_for_import(dataset_id):
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
 
-def create_database_table(row, dataset_id, append=False):
+def create_database_table(row, dataset_id, append=False, optional_fields=None):
+    optional_fields = optional_fields or []
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
     if not append:
         drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
@@ -500,9 +634,10 @@ def create_database_table(row, dataset_id, append=False):
             'double': 'double precision'
         }
         for cell in row:
-            create_table_command += ', {field_name} {type}'.format(
+            create_table_command += ', {field_name} {type} {null}'.format(
                 field_name=cell.column,
-                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())]
+                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())],
+                null='NOT NULL' if cell.column not in optional_fields else ''
             )
 
         create_table_command += ');'
@@ -616,7 +751,6 @@ def add_or_update_database_fields(table_name, fields):
             )
 
             alter_commands.append(alter_command)
-
         with get_cursor() as c:
             for command in alter_commands:
                 c.execute(command)
@@ -696,7 +830,6 @@ def determine_extent(table):
             extent = ADJUSTED_GLOBAL_EXTENT
 
         return extent.as_dict()
-
 
 def get_cursor():
     return connection.cursor()
