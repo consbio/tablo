@@ -58,6 +58,11 @@ class FeatureServiceResource(ModelResource):
                 r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine_tables'.format(
                     self._meta.resource_name
                 ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
+            ),
+            url(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply-edits'.format(
+                    self._meta.resource_name
+                ), self.wrap_view('apply_edits'), name="api_featureservice_apply_edits"
             )
         ]
 
@@ -119,6 +124,88 @@ class FeatureServiceResource(ModelResource):
         service.save()
 
         return self.create_response(request, {'table_name': table_name})
+
+    def apply_edits(self, request, **kwargs):
+
+        try:
+            service = FeatureService.objects.get(id=kwargs['service_id'])
+        except ObjectDoesNotExist:
+            return Http404()
+
+        adds = json.loads(request.POST.get('adds', '[]'))
+        updates = json.loads(request.POST.get('updates', '[]'))
+        delete_list = request.POST.get('deletes', None)
+        deletes = str(delete_list).split(',') if delete_list else []
+
+        add_response_obj = []
+        feature_service_layer = service.featureservicelayer_set.first()
+        original_time_extent = feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
+        for feature in adds:
+            try:
+                object_id = feature_service_layer.add_feature(feature)
+                add_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                add_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error adding feature: ' + str(e)
+                    }
+                })
+
+        update_response_obj = []
+        for feature in updates:
+            try:
+                object_id = feature_service_layer.update_feature(feature)
+                update_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                update_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error updating feature: ' + str(e)
+                    }
+                })
+
+        delete_response_obj = []
+        for object_id in deletes:
+            try:
+                object_id = feature_service_layer.delete_feature(object_id)
+                delete_response_obj.append({
+                    'objectId': object_id,
+                    'success': True
+                })
+            except Exception as e:
+                logger.exception()
+                delete_response_obj.append({
+                    'success': False,
+                    'error': {
+                        'code': -999999,
+                        'description': 'Error deleting feature: ' + str(e)
+                    }
+                })
+
+        response_obj = {
+            'addResults': add_response_obj,
+            'updateResults': update_response_obj,
+            'deleteResults': delete_response_obj
+        }
+
+        if original_time_extent:
+            new_time_extent = feature_service_layer.get_raw_time_extent()
+            if (new_time_extent[0] != original_time_extent[0] or
+                new_time_extent[1] != original_time_extent[1]):
+                response_obj['new_time_extent'] = json.dumps(new_time_extent)
+
+        return self.create_response(request, response_obj)
 
 
 class FeatureServiceLayerResource(ModelResource):
@@ -195,6 +282,7 @@ class TemporaryFileResource(ModelResource):
         sample_row = next(row_set.sample)
         bundle.data['fieldNames'] = [cell.column for cell in sample_row]
         bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
+        bundle.data['optionalFields'] = determine_optional_fields(row_set)
 
         x_field, y_field = determine_x_and_y_fields(sample_row)
         if x_field and y_field:
@@ -220,7 +308,7 @@ class TemporaryFileResource(ModelResource):
 
             row_set = csv_utils.prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
-            table_name = create_database_table(sample_row, dataset_id)
+            table_name = create_database_table(sample_row, dataset_id, optional_fields=determine_optional_fields(row_set))
             populate_data(table_name, row_set)
 
             add_or_update_database_fields(table_name, additional_fields)
@@ -266,3 +354,22 @@ class TemporaryFileResource(ModelResource):
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
+
+
+def json_date_serializer(obj):
+    # Handles date serialization when part of the response object
+
+    if hasattr(obj, 'isoformat'):
+        serial = obj.isoformat()
+        return serial
+    return json.JSONEncoder.default(obj)
+
+
+def determine_optional_fields(row_set):
+
+    optional_fields = set([])
+    for row in row_set:
+        for cell in row:
+            if cell.empty:
+                optional_fields.add(cell.column)
+    return optional_fields
