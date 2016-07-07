@@ -306,9 +306,12 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
+            # Use separate iterator of table rows to not exaust the main one
+            optional_fields = determine_optional_fields(csv_utils.prepare_csv_rows(obj.file))
+
             row_set = csv_utils.prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
-            table_name = create_database_table(sample_row, dataset_id, optional_fields=determine_optional_fields(row_set))
+            table_name = create_database_table(sample_row, dataset_id, optional_fields=optional_fields)
             populate_data(table_name, row_set)
 
             add_or_update_database_fields(table_name, additional_fields)
