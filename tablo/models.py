@@ -21,6 +21,7 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
+    'character varying': 'esriFieldTypeString',
     'double precision': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
     'timestamp without time zone': 'esriFieldTypeDate',
