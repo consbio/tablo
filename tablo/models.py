@@ -547,6 +547,13 @@ class FeatureServiceLayer(models.Model):
         return primary_key
 
 
+class FeatureServiceLayerRelations(models.Model):
+    id = models.AutoField(auto_created=True, primary_key=True)
+    layer = models.ForeignKey(FeatureServiceLayer)
+    related_index = models.PositiveIntegerField(default=0)
+    related_title = models.CharField(max_length=255)
+
+
 def delete_data_table(sender, instance, **kwargs):
     with get_cursor() as c:
         c.execute('DROP table IF EXISTS {table_name}'.format(table_name=instance.table))
