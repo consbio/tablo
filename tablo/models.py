@@ -4,8 +4,8 @@ import logging
 import re
 import uuid
 import sqlparse
-from datetime import date, datetime
 
+from datetime import datetime
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
@@ -14,6 +14,7 @@ from sqlparse.tokens import Token, Punctuation, Keyword, Operator
 
 from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.geom_utils import Extent, SpatialReference
+
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
 
@@ -158,7 +159,10 @@ class FeatureServiceLayer(models.Model):
     def fields(self):
         fields = []
         with connection.cursor() as c:
-            c.execute('select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;', [self.table])
+            c.execute(
+                'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
+                [self.table]
+            )
             # c.description won't be populated without first running the query above
             for field_info in c.fetchall():
                 field_type = field_info[2]
@@ -279,15 +283,20 @@ class FeatureServiceLayer(models.Model):
             # be attempts at SQL injection
             return False
         else:
+            keep_token_types = {Keyword, Operator.Comparison}
+            skip_token_types = {Punctuation, Token.Literal.Number.Integer}
+            skip_token_values = {'WHERE', 'AND', 'OR', 'IS', 'NOT NULL', 'NULL'}
+
             flat_clause = parsed_where_clause[0].flatten()
-            tokens_no_whitespace = [token for token in flat_clause if not token.is_whitespace() and token.ttype != Punctuation and token.ttype != Token.Literal.Number.Integer]
+            tokens_no_whitespace = [
+                token for token in flat_clause if not token.is_whitespace() and token.ttype not in skip_token_types
+            ]
             query_fields = []
             for index, token in enumerate(tokens_no_whitespace):
-                if token.ttype in (Keyword, Operator.Comparison) and token.value not in ('WHERE', 'AND', 'OR', 'IS', 'NOT NULL', 'NULL'):
-                    query_fields.append(tokens_no_whitespace[index-1].value.replace('"', ''))
+                if token.ttype in keep_token_types and token.value not in skip_token_values:
+                    query_fields.append(tokens_no_whitespace[index - 1].value.replace('"', ''))
 
-            valid_fields = self._validate_fields(query_fields)
-            return valid_fields
+            return self._validate_fields(query_fields)
 
     def _validate_fields(self, fields):
         test_fields = [field for field in fields if field != '*']
@@ -396,7 +405,6 @@ class FeatureServiceLayer(models.Model):
             num_samples=1000
         )
 
-        values = []
         with get_cursor() as c:
             c.execute(sql_statement)
             values = [row[0] for row in c.fetchall()]
@@ -413,16 +421,17 @@ class FeatureServiceLayer(models.Model):
 
     def add_feature(self, feature):
 
+        system_cols = {PRIMARY_KEY_NAME, POINT_FIELD_NAME}
         with get_cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
-            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]]
+            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in system_cols]
 
         columns_not_present = colnames_in_table[0:]
 
         columns_in_request = feature['attributes'].copy()
-        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]:
+        for field in system_cols:
             if field in columns_in_request:
                 columns_in_request.pop(field)
 
@@ -437,10 +446,9 @@ class FeatureServiceLayer(models.Model):
         insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
             dataset_table_name=self.table,
             attribute_names=','.join(colnames_in_table),
-            placeholders=','.join(['%s' for name in colnames_in_table]),
+            placeholders=','.join('%s' for name in colnames_in_table),
             primary_key=PRIMARY_KEY_NAME
         )
-
         set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(
             dataset_table_name=self.table,
             point_column=POINT_FIELD_NAME,
@@ -510,9 +518,11 @@ class FeatureServiceLayer(models.Model):
             )
 
         argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
-        update_command = ('UPDATE {dataset_table_name}'
-                         ' SET {set_portion}'
-                         ' WHERE {primary_key}=%s').format(
+        update_command = (
+            'UPDATE {dataset_table_name}'
+            ' SET {set_portion}'
+            ' WHERE {primary_key}=%s'
+        ).format(
             dataset_table_name=self.table,
             set_portion=','.join(argument_updates),
             primary_key=PRIMARY_KEY_NAME
@@ -577,11 +587,12 @@ def copy_data_table_for_import(dataset_id):
 
     alter_table_command = (
         'ALTER TABLE {import_table} ADD PRIMARY KEY ({primary_key}), '
-        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')').format(
-            import_table=import_table_name,
-            primary_key=PRIMARY_KEY_NAME,
-            sequence_name=sequence_name
-        )
+        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')'
+    ).format(
+        import_table=import_table_name,
+        primary_key=PRIMARY_KEY_NAME,
+        sequence_name=sequence_name
+    )
 
     alter_sequence_command = 'ALTER SEQUENCE {sequence_name} owned by {import_table}.{primary_key}'.format(
         import_table=import_table_name,
@@ -591,11 +602,12 @@ def copy_data_table_for_import(dataset_id):
 
     alter_sequence_start_command = (
         'SELECT setval(\'{sequence_name}\', (select max({primary_key})+1 '
-        'from {import_table}), false)').format(
-            import_table=import_table_name,
-            primary_key=PRIMARY_KEY_NAME,
-            sequence_name=sequence_name
-        )
+        'from {import_table}), false)'
+    ).format(
+        import_table=import_table_name,
+        primary_key=PRIMARY_KEY_NAME,
+        sequence_name=sequence_name
+    )
 
     index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
         table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
@@ -656,7 +668,7 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
 def create_aggregate_database_table(row, dataset_id):
     row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
     table_name = create_database_table(row, dataset_id)
-    row.pop() # remove the appended column
+    row.pop()  # remove the appended column
     return table_name
 
 
@@ -727,9 +739,11 @@ def add_or_update_database_fields(table_name, fields):
         required = field.get('required', False)
         value = field.get('value')
 
-        check_command = ('SELECT EXISTS('
-                         'SELECT column_name FROM information_schema.columns '
-                         'WHERE table_name=%s and column_name=%s)')
+        check_command = (
+            'SELECT EXISTS('
+            'SELECT column_name FROM information_schema.columns '
+            'WHERE table_name=%s and column_name=%s)'
+        )
         with get_cursor() as c:
             c.execute(check_command, (table_name, column_name))
             column_exists = c.fetchone()[0]
@@ -777,7 +791,7 @@ def add_point_column(dataset_id, is_import=True):
         c.execute(index_command)
 
 
-def populate_point_data(id, csv_info, is_import=True):
+def populate_point_data(pk, csv_info, is_import=True):
 
     srid = csv_info['srid']
 
@@ -794,13 +808,13 @@ def populate_point_data(id, csv_info, is_import=True):
         )
 
     update_command = 'UPDATE {table_name} SET {field_name} = {make_point_command}'.format(
-        table_name=TABLE_NAME_PREFIX + id + (IMPORT_SUFFIX if is_import else ''),
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
         field_name=POINT_FIELD_NAME,
         make_point_command=make_point_command
     )
 
     clear_null_command = 'DELETE FROM {table_name} WHERE {field_name} IS NULL'.format(
-        table_name=TABLE_NAME_PREFIX + id + (IMPORT_SUFFIX if is_import else ''),
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
         field_name=POINT_FIELD_NAME,
     )
 
@@ -811,26 +825,27 @@ def populate_point_data(id, csv_info, is_import=True):
 
 def determine_extent(table):
 
-        try:
-            query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
-                field_name=POINT_FIELD_NAME,
-                table_name=table
-            )
+    try:
+        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
+            field_name=POINT_FIELD_NAME,
+            table_name=table
+        )
 
-            with get_cursor() as c:
-                c.execute(query)
-                extent_box = c.fetchone()[0]
-                if extent_box:
-                    extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
-                else:
-                    extent = ADJUSTED_GLOBAL_EXTENT
+        with get_cursor() as c:
+            c.execute(query)
+            extent_box = c.fetchone()[0]
+            if extent_box:
+                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
+            else:
+                extent = ADJUSTED_GLOBAL_EXTENT
 
-        except DatabaseError as error:
-            logger.excdeption('Error generating extent for table {0}, returning adjusted global extent'.format(table))
-            # Default to adjusted global extent if there is an error, similar to the one we present on the map page
-            extent = ADJUSTED_GLOBAL_EXTENT
+    except DatabaseError:
+        logger.excdeption('Error generating extent for table {0}, returning adjusted global extent'.format(table))
+        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
+        extent = ADJUSTED_GLOBAL_EXTENT
 
-        return extent.as_dict()
+    return extent.as_dict()
+
 
 def get_cursor():
     return connection.cursor()
@@ -853,6 +868,6 @@ class TemporaryFile(models.Model):
     @property
     def extension(self):
         if self.filename.find(".") != -1:
-            return self.filename[self.filename.rfind(".")+1:]
+            return self.filename[self.filename.rfind(".") + 1:]
         else:
             return ""
