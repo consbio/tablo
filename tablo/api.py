@@ -210,9 +210,25 @@ class FeatureServiceResource(ModelResource):
         return self.create_response(request, response_obj)
 
 
+class FeatureServiceLayerRelationsResource(ModelResource):
+
+    layer_id = fields.IntegerField(readonly=True)
+
+    class Meta:
+        object_class = FeatureServiceLayerRelations
+        resource_name = 'featureservicelayerrelations'
+        list_allowed_methods = ['get']
+        detail_allowed_methods = ['get']
+        serializer = Serializer(formats=['json', 'jsonp'])
+        queryset = FeatureServiceLayerRelations.objects.all()
+        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
+        authorization = DjangoAuthorization()
+
+
 class FeatureServiceLayerResource(ModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
+    relations = fields.ToManyField(FeatureServiceLayerRelationsResource, 'relations', readonly=True, null=True)
 
     class Meta:
         object_class = FeatureServiceLayer
@@ -222,19 +238,6 @@ class FeatureServiceLayerResource(ModelResource):
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureServiceLayer.objects.all()
-        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
-        authorization = DjangoAuthorization()
-
-
-class FeatureServiceLayerRelationsResource(ModelResource):
-
-    class Meta:
-        object_class = FeatureServiceLayerRelations
-        resource_name = 'featureservicelayerrelations'
-        list_allowed_methods = ['get']
-        detail_allowed_methods = ['get']
-        serializer = Serializer(formats=['json', 'jsonp'])
-        queryset = FeatureServiceLayerRelations.objects.all()
         authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
         authorization = DjangoAuthorization()
 
