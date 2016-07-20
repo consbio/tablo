@@ -229,7 +229,8 @@ class FeatureServiceLayerResource(ModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
     relations = fields.ToManyField(
-        FeatureServiceLayerRelationsResource, attribute='featureservicelayerrelations_set', readonly=True, null=True
+        FeatureServiceLayerRelationsResource,
+        attribute='featureservicelayerrelations_set', full=True, readonly=True, null=True
     )
 
     class Meta:
