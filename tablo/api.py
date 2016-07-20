@@ -212,7 +212,7 @@ class FeatureServiceResource(ModelResource):
 
 class FeatureServiceLayerRelationsResource(ModelResource):
 
-    layer_id = fields.IntegerField(readonly=True)
+    layer_id = fields.IntegerField(attribute='layer_id', readonly=True)
 
     class Meta:
         object_class = FeatureServiceLayerRelations
@@ -220,7 +220,7 @@ class FeatureServiceLayerRelationsResource(ModelResource):
         list_allowed_methods = ['get']
         detail_allowed_methods = ['get']
         serializer = Serializer(formats=['json', 'jsonp'])
-        queryset = FeatureServiceLayerRelations.objects.all()
+        queryset = FeatureServiceLayerRelations.objects.select_related('layer').all()
         authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
         authorization = DjangoAuthorization()
 
@@ -228,7 +228,9 @@ class FeatureServiceLayerRelationsResource(ModelResource):
 class FeatureServiceLayerResource(ModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
-    relations = fields.ToManyField(FeatureServiceLayerRelationsResource, 'relations', readonly=True, null=True)
+    relations = fields.ToManyField(
+        FeatureServiceLayerRelationsResource, attribute='featureservicelayerrelations_set', readonly=True, null=True
+    )
 
     class Meta:
         object_class = FeatureServiceLayer
