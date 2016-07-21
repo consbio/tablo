@@ -552,6 +552,8 @@ class FeatureServiceLayerRelations(models.Model):
     layer = models.ForeignKey(FeatureServiceLayer)
     related_index = models.PositiveIntegerField(default=0)
     related_title = models.CharField(max_length=255)
+    source_column = models.CharField(max_length=255)
+    target_column = models.CharField(max_length=255)
 
 
 def delete_data_table(sender, instance, **kwargs):
