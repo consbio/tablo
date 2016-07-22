@@ -3,7 +3,7 @@ import logging
 import time
 import re
 
-from django.http import HttpResponse, Http404, HttpResponseBadRequest, HttpResponseNotAllowed
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -129,8 +129,8 @@ class FeatureLayerView(View):
         service_id = kwargs.get('service_id')
         layer_index = kwargs.get('layer_index')
 
-        self.feature_service_layer = get_object_or_404(FeatureServiceLayer,
-            service__id=service_id, layer_order=layer_index
+        self.feature_service_layer = get_object_or_404(
+            FeatureServiceLayer, service__id=service_id, layer_order=layer_index
         )
         return super(FeatureLayerView, self).dispatch(request, *args, **kwargs)
 
@@ -186,7 +186,7 @@ class TimeQueryView(FeatureLayerView):
         time_query_result = self.feature_service_layer.get_distinct_geometries_across_time()
 
         response = {
-            'fields': [{'name': 'count', 'alias':'count', 'type': 'esriFieldTypeInteger'}],
+            'fields': [{'name': 'count', 'alias': 'count', 'type': 'esriFieldTypeInteger'}],
             'geometryType': 'esriGeometryPoint',
             'count': len(time_query_result),
             'features': covert_wkt_to_esri_feature(time_query_result)
@@ -213,8 +213,8 @@ class QueryView(FeatureLayerView):
 
         if 'time' in kwargs and kwargs['time'] != '':
             start_time, end_time = kwargs['time'].split(',')
-            search_params['start_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(start_time)/1000))
-            search_params['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(end_time)/1000))
+            search_params['start_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(start_time) / 1000))
+            search_params['end_time'] = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(float(end_time) / 1000))
 
         search_params['out_sr'] = kwargs.get('outSR')
 
