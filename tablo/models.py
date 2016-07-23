@@ -20,8 +20,10 @@ TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/n
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
+    'boolean': 'esriFieldTypeSmallInteger',
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
+    'character': 'esriFieldTypeString',
     'character varying': 'esriFieldTypeString',
     'double precision': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
@@ -554,6 +556,27 @@ class FeatureServiceLayerRelations(models.Model):
     related_title = models.CharField(max_length=255)
     source_column = models.CharField(max_length=255)
     target_column = models.CharField(max_length=255)
+
+    @property
+    def fields(self):
+        fields = []
+        with connection.cursor() as c:
+            c.execute(
+                'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
+                ['{table}_{index}'.format(table=self.layer.table, index=self.related_index)]
+            )
+            # c.description won't be populated without first running the query above
+            for field_info in c.fetchall():
+                field_type = field_info[2]
+                fields.append({
+                    'name': field_info[0],
+                    'alias': field_info[0],
+                    'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
+                    'nullable': True if field_info[1] == 'YES' else False,
+                    'editable': True
+                })
+
+        return fields
 
 
 def delete_data_table(sender, instance, **kwargs):

@@ -96,6 +96,14 @@ class FeatureServiceLayerDetailView(DetailView):
             'id': self.object.layer_order
         }
 
+        relations = self.object.featureservicelayerrelations_set.all()
+        data['relatedTables'] = [
+            {
+                'name': r.related_title,
+                'fields': [{'name': f['name'], 'type': f['type']} for f in r.fields]
+            } for r in relations
+        ]
+
         if self.object.start_time_field:
             data.update({
                 'timeInfo': self.object.time_info
