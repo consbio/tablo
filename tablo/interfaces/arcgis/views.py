@@ -214,7 +214,7 @@ class QueryView(FeatureLayerView):
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        return_ids_only = kwargs.get('returnIdsOnly', 'false') in ('true', 'True')
+        return_ids_only = kwargs.get('returnIdsOnly', 'false').lower() == 'true'
 
         if 'where' in kwargs and kwargs['where'] != '':
             search_params['additional_where_clause'] = kwargs.get('where')
@@ -237,10 +237,11 @@ class QueryView(FeatureLayerView):
 
         if return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
-        elif kwargs.get('returnCountOnly', 'false') == 'true':
+            search_params['return_geometry'] = False
+        elif kwargs.get('returnCountOnly', 'false').lower() == 'true':
             search_params['only_return_count'] = True
-        elif kwargs.get('returnGeometry', 'true') == 'true':
-            search_params['return_geometry'] = True
+        elif kwargs.get('returnGeometry', 'true').lower() == 'false':
+            search_params['return_geometry'] = False
 
         try:
             query_response = self.feature_service_layer.perform_query(**search_params)
@@ -255,7 +256,7 @@ class QueryView(FeatureLayerView):
                 'objectIdFieldName': self.feature_service_layer.object_id_field,
                 'objectIds': [feature[self.feature_service_layer.object_id_field] for feature in query_response]
             }
-        elif kwargs.get('returnCountOnly', 'false') == 'true':
+        elif kwargs.get('returnCountOnly', 'false').lower() == 'true':
             response = {'count': query_response}
         else:
             response = {

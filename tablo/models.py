@@ -9,8 +9,7 @@ from datetime import datetime
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
-
-from sqlparse.tokens import Token, Punctuation, Keyword, Operator
+from sqlparse.tokens import Token
 
 from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.geom_utils import Extent, SpatialReference
@@ -50,6 +49,27 @@ ADJUSTED_GLOBAL_EXTENT = Extent({
 })
 
 logger = logging.getLogger(__name__)
+
+
+def get_fields(for_table):
+    fields = []
+    with connection.cursor() as c:
+        c.execute(
+            'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
+            [for_table]
+        )
+        # c.description won't be populated without first running the query above
+        for field_info in c.fetchall():
+            field_type = field_info[2]
+            fields.append({
+                'name': field_info[0],
+                'alias': field_info[0],
+                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
+                'nullable': True if field_info[1] == 'YES' else False,
+                'editable': True
+            })
+
+    return fields
 
 
 class FeatureService(models.Model):
@@ -127,6 +147,9 @@ class FeatureServiceLayer(models.Model):
     time_interval_units = models.CharField(max_length=255, null=True)
     drawing_info = models.TextField()
 
+    _fields = None
+    _related_fields = None
+
     @property
     def extent(self):
         if self._extent is None:
@@ -159,29 +182,25 @@ class FeatureServiceLayer(models.Model):
 
     @property
     def fields(self):
-        fields = []
-        with connection.cursor() as c:
-            c.execute(
-                'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
-                [self.table]
-            )
-            # c.description won't be populated without first running the query above
-            for field_info in c.fetchall():
-                field_type = field_info[2]
-                if field_info[0] == 'db_id':
-                    field_type = 'OID'
-                elif field_info[0] == POINT_FIELD_NAME:
-                    field_type = 'Geometry'
+        if self._fields is None:
+            fields = get_fields(self.table)
+            for field in fields:
+                if field['name'] == 'db_id':
+                    field['type'] = 'esriFieldTypeOID'
+                elif field['name'] == POINT_FIELD_NAME:
+                    field['type'] = 'esriFieldTypeGeometry'
+            self._fields = fields
 
-                fields.append({
-                    'name': field_info[0],
-                    'alias': field_info[0],
-                    'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
-                    'nullable': True if field_info[1] == 'YES' else False,
-                    'editable': True
-                })
+        return self._fields
 
-        return fields
+    @property
+    def related_fields(self):
+        if self._related_fields is None:
+            self._related_fields = {
+                '{table}.{field}'.format(table=r.related_title, field=f['name']): f
+                for r in self.featureservicelayerrelations_set.all() for f in r.fields
+            }
+        return self._related_fields
 
     @property
     def time_info(self):
@@ -195,73 +214,146 @@ class FeatureServiceLayer(models.Model):
         return None
 
     def perform_query(self, **kwargs):
-        additional_where_clause = kwargs.get('additional_where_clause')
-        start_time = kwargs.get('start_time')
-        end_time = kwargs.get('end_time')
-        extent = kwargs.get('extent')
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
-        object_ids = kwargs.get('object_ids', [])
-        return_fields = kwargs.get('return_fields', [])
+        return_fields = kwargs.get('return_fields', ['*'])
         return_geometry = kwargs.get('return_geometry', True)
         only_return_count = kwargs.get('only_return_count', False)
+        additional_where_clause = kwargs.get('additional_where_clause')
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
         if not self._validate_fields(return_fields) or not self._validate_where_clause(additional_where_clause):
-            raise ValueError("Invalid query parameters")
+            raise ValueError('Invalid query parameters')
 
         if only_return_count:
-            return_fields = ['count(*)']
-        elif return_geometry:
-            return_fields.append('ST_AsText(ST_Transform(dbasin_geom, {0}))'.format(out_sr))
+            select_fields = 'COUNT(0)'
+        else:
+            # Delimit and alias fields for query in double quotes, but ignore '*'
+            select_fields = [f if '.' in f else 'source.{0}'.format(f) for f in return_fields]
+            select_fields = '", "'.join('"."'.join(f.split('.')) for f in select_fields).join('""')
+            select_fields = select_fields.replace('"*"', '*')
 
-        params = []   # Collect parameters to the query that we can let the SQL engine escape for us
-        where = '1=1'
-        if additional_where_clause:
-            # Need to escape any % in like clauses so they don't get in the way of query parameters later
-            where = additional_where_clause.replace('%', '%%')
-        if start_time:
-            if start_time == end_time:
-                where += " AND {layer_time_field} = %s".format(
-                    layer_time_field=self.start_time_field
-                )
-                params.append(start_time)
-            else:
-                where += " AND {layer_time_field} BETWEEN %s AND %s".format(
-                    layer_time_field=self.start_time_field
-                )
-                params.append(start_time)
-                params.append(end_time)
-        elif self.start_time_field and not only_return_count and not additional_where_clause:
-            # If layer has a time component, default is to show first time step
-            where += " AND {layer_time_field} = (SELECT MIN({layer_time_field}) FROM {table})".format(
-                layer_time_field=self.start_time_field,
-                table=self.table
+            if return_geometry:
+                select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
+
+        join = '' if only_return_count else self._build_join_clause(return_fields, additional_where_clause)
+        where, query_params = self._build_where_clause(additional_where_clause, only_return_count, **kwargs)
+
+        with get_cursor() as c:
+            # where clause may contain references to table and fields
+            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where}'
+            query_clause = query_clause.format(
+                fields=select_fields, table=self.table, join=join.strip(), where=where.strip()
+            )
+            c.execute(query_clause, query_params)
+            response = dictfetchall(c)
+
+        return response
+
+    def _build_join_clause(self, fields, where, **kwargs):
+        if where is None:
+            return ''
+
+        query_fields = set(fields)
+        query_fields = query_fields.union(self._parse_where_clause(where)[0])
+
+        join_fields = query_fields.intersection(self.related_fields.keys())
+        join_fields = set(f[:f.index('.')] for f in join_fields)  # Derive distinct table prefixes
+        join_clause = ''
+
+        for relation in self.featureservicelayerrelations_set.filter(related_title__in=join_fields):
+            join_clause += ' LEFT OUTER JOIN "{table}" AS "{related_title}"'.format(
+                table=relation.table, related_title=relation.related_title
+            )
+            join_clause += ' ON "source"."{source}" = "{related_title}"."{target}"'.format(
+                source=relation.source_column, related_title=relation.related_title, target=relation.target_column
             )
 
-        if object_ids:
-            where += ' AND {primary_key} IN ({object_id_list})'.format(
+        return join_clause
+
+    def _build_where_clause(self, where, count_only, **kwargs):
+        """ :return: a Python format where clause with corresponding params for the SQL engine to escape """
+
+        start_time = kwargs.get('start_time')
+        end_time = kwargs.get('end_time')
+
+        if where is None:
+            where_clause = 'WHERE 1=1'
+        else:
+            where_clause = ''
+
+            for token in sqlparse.parse('WHERE {0}'.format(where.replace('%', '%%')))[0].flatten():
+                if token.ttype != Token.Name:
+                    where_clause += token.value
+                elif token.value != token.parent.value:
+                    # Token is aliased: just write the segments as they come
+                    where_clause += token.value.strip('"').join('""')
+                else:
+                    # Token is not aliased if parent doesn't include it: add source alias
+                    where_clause += '"source"."{field}"'.format(field=token.value.strip('"'))
+
+        query_params = []
+
+        if self.start_time_field:
+            layer_time_field = '"source"."{time_field}"'.format(time_field=self.start_time_field)
+
+            if start_time:
+                if start_time == end_time:
+                    where_clause += ' AND {time_field} = %s'.format(time_field=layer_time_field)
+                    query_params.append(start_time)
+                else:
+                    where_clause += ' AND {time_field} BETWEEN %s AND %s'.format(time_field=layer_time_field)
+                    query_params.append(start_time)
+                    query_params.append(end_time)
+            elif where is None and not count_only:
+                # If layer has a time component, default is to show first time step
+                where_clause += ' AND {time_field} = (SELECT MIN({time_field}) FROM "{table}")'.format(
+                    time_field=layer_time_field, table=self.table
+                )
+
+        if kwargs.get('object_ids'):
+            object_ids = kwargs['object_ids']
+
+            where_clause += ' AND "source"."{primary_key}" IN ({object_id_list})'.format(
                 primary_key=PRIMARY_KEY_NAME,
                 object_id_list=','.join(['%s' for obj_id in object_ids]),
             )
             for obj_id in object_ids:
-                params.append(obj_id)
+                query_params.append(obj_id)
 
-        if extent:
-            where += ' AND ST_Intersects(dbasin_geom, ST_GeomFromText(%s, 3857)) '
-            params.append(extent.as_sql_poly())
+        if kwargs.get('extent'):
+            where_clause += ' AND ST_Intersects("source"."dbasin_geom", ST_GeomFromText(%s, 3857)) '
+            query_params.append(kwargs['extent'].as_sql_poly())
 
-        with get_cursor() as c:
-            # where clause may contain references to table and fields
-            query_clause = 'SELECT {fields} FROM {table} WHERE ' + where
-            query_clause = query_clause.format(
-                fields=','.join(return_fields),
-                table=self.table
-            )
-            c.execute(query_clause, params)
-            response = dictfetchall(c)
+        return where_clause, query_params
 
-        return response
+    def _parse_where_clause(self, where):
+        if where is None or where == '1=1':
+            return None
+
+        parsed = sqlparse.parse('WHERE {where_clause}'.format(where_clause=where))
+        fields = set(t.parent.value.replace('"', '') for t in parsed[0].flatten() if t.ttype == Token.Name)
+
+        return fields, parsed[1:]  # Additional statements may occur but are invalid
+
+    def _validate_where_clause(self, where):
+
+        parsed = self._parse_where_clause(where)
+
+        if parsed is None:
+            return True
+        elif parsed[1]:
+            return False  # More than one statement means SQL injection.
+        else:
+            return self._validate_fields(parsed[0])
+
+    def _validate_fields(self, fields):
+        query_fields = {field.replace('"', '') for field in fields if field != '*'}
+        if not query_fields:
+            return True
+        else:
+            valid_fields = set(r for r in self.related_fields).union(f['name'] for f in self.fields)
+            return query_fields.issubset(valid_fields)
 
     def get_distinct_geometries_across_time(self, *kwargs):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), count(*) FROM {table} GROUP BY ST_AsText({geom_field})'.format(
@@ -274,35 +366,6 @@ class FeatureServiceLayer(models.Model):
             response = dictfetchall(c)
 
         return response
-
-    def _validate_where_clause(self, where):
-        if where is None or where == '1=1':
-            return True
-
-        parsed_where_clause = sqlparse.parse('WHERE {where_clause}'.format(where_clause=where))
-        if len(parsed_where_clause) != 1:
-            # Where clause should only contain one statement (the WHERE clause), additional statements would
-            # be attempts at SQL injection
-            return False
-        else:
-            keep_token_types = {Keyword, Operator.Comparison}
-            skip_token_types = {Punctuation, Token.Literal.Number.Integer}
-            skip_token_values = {'WHERE', 'AND', 'OR', 'IS', 'NOT NULL', 'NULL'}
-
-            flat_clause = parsed_where_clause[0].flatten()
-            tokens_no_whitespace = [
-                token for token in flat_clause if not token.is_whitespace() and token.ttype not in skip_token_types
-            ]
-            query_fields = []
-            for index, token in enumerate(tokens_no_whitespace):
-                if token.ttype in keep_token_types and token.value not in skip_token_values:
-                    query_fields.append(tokens_no_whitespace[index - 1].value.replace('"', ''))
-
-            return self._validate_fields(query_fields)
-
-    def _validate_fields(self, fields):
-        test_fields = [field for field in fields if field != '*']
-        return len(test_fields) == 0 or set(test_fields).issubset([field['name'] for field in self.fields])
 
     def get_unique_values(self, field):
 
@@ -557,26 +620,17 @@ class FeatureServiceLayerRelations(models.Model):
     source_column = models.CharField(max_length=255)
     target_column = models.CharField(max_length=255)
 
+    _fields = None
+
     @property
     def fields(self):
-        fields = []
-        with connection.cursor() as c:
-            c.execute(
-                'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
-                ['{table}_{index}'.format(table=self.layer.table, index=self.related_index)]
-            )
-            # c.description won't be populated without first running the query above
-            for field_info in c.fetchall():
-                field_type = field_info[2]
-                fields.append({
-                    'name': field_info[0],
-                    'alias': field_info[0],
-                    'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
-                    'nullable': True if field_info[1] == 'YES' else False,
-                    'editable': True
-                })
+        if self._fields is None:
+            self._fields = get_fields(self.table)
+        return self._fields
 
-        return fields
+    @property
+    def table(self):
+        return '{table}_{index}'.format(table=self.layer.table, index=self.related_index)
 
 
 def delete_data_table(sender, instance, **kwargs):
