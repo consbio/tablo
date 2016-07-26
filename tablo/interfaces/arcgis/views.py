@@ -3,6 +3,7 @@ import logging
 import time
 import re
 
+from django.db.utils import DatabaseError
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
@@ -245,7 +246,7 @@ class QueryView(FeatureLayerView):
 
         try:
             query_response = self.feature_service_layer.perform_query(**search_params)
-        except ValueError:
+        except (DatabaseError, ValueError):
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
         # When requesting selection IDs, ArcGIS sends both returnIdsOnly and returnCountOnly, but expects the response
