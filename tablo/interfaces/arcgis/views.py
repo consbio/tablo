@@ -227,13 +227,13 @@ class QueryView(FeatureLayerView):
         search_params['out_sr'] = kwargs.get('outSR')
 
         if 'objectIds' in kwargs:
-            search_params['object_ids'] = kwargs.get('objectIds', '').split(',')
+            search_params['object_ids'] = (kwargs['objectIds'] or '').split(',')
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
         if kwargs.get('outFields') and not return_ids_only:
-            search_params['return_fields'] = kwargs.get('outFields').split(',')
+            search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
 
         if return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
