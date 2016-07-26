@@ -307,8 +307,10 @@ class FeatureServiceLayer(models.Model):
                     query_params.append(end_time)
             elif where is None and not count_only:
                 # If layer has a time component, default is to show first time step
-                where_clause += ' AND {time_field} = (SELECT MIN({time_field}) FROM "{table}")'.format(
-                    time_field=layer_time_field, table=self.table
+                where_clause += ' AND {time_field} = (SELECT MIN({subquery_time_field}) FROM "{table}")'.format(
+                    time_field=layer_time_field,
+                    subquery_time_field=self.start_time_field,
+                    table=self.table
                 )
 
         if kwargs.get('object_ids'):
