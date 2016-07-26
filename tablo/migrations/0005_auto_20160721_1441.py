@@ -6,9 +6,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
 
-    dependencies = [
-        ('tablo', '0004_featureservicelayerrelations'),
-    ]
+    dependencies = [('tablo', '0004_featureservicelayerrelations')]
 
     operations = [
         migrations.AddField(

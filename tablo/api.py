@@ -139,7 +139,9 @@ class FeatureServiceResource(ModelResource):
 
         add_response_obj = []
         feature_service_layer = service.featureservicelayer_set.first()
-        original_time_extent = feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
+        original_time_extent = (
+            feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
+        )
         for feature in adds:
             try:
                 object_id = feature_service_layer.add_feature(feature)
