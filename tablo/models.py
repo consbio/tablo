@@ -257,8 +257,9 @@ class FeatureServiceLayer(models.Model):
         query_fields = set(fields)
         query_fields = query_fields.union(self._parse_where_clause(where)[0])
 
-        join_fields = query_fields.intersection(self.related_fields.keys())
-        join_fields = set(f[:f.index('.')] for f in join_fields)  # Derive distinct table prefixes
+        join_fields = query_fields.intersection(self.related_fields.keys())   # Filter by available related fields
+        join_fields = join_fields.union(f for f in query_fields if '*' in f)  # Ensure wildcard fields are included
+        join_fields = set(f[:f.index('.')] for f in join_fields)              # Derive distinct table prefixes
         join_clause = ''
 
         for relation in self.featureservicelayerrelations_set.filter(related_title__in=join_fields):
@@ -350,7 +351,7 @@ class FeatureServiceLayer(models.Model):
             return self._validate_fields(parsed[0])
 
     def _validate_fields(self, fields):
-        query_fields = {field.replace('"', '') for field in fields if field != '*'}
+        query_fields = {field.replace('"', '') for field in fields if '*' not in field}
         if not query_fields:
             return True
         else:
