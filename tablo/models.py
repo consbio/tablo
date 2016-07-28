@@ -213,56 +213,74 @@ class FeatureServiceLayer(models.Model):
             }
         return None
 
-    def perform_query(self, **kwargs):
-        out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
+    def perform_query(self, limit, offset, **kwargs):
+        count_only = kwargs.get('count_only', False)
         return_fields = kwargs.get('return_fields', ['*'])
         return_geometry = kwargs.get('return_geometry', True)
-        only_return_count = kwargs.get('only_return_count', False)
+        out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
+
         additional_where_clause = kwargs.get('additional_where_clause')
+        order_by_fields = kwargs.get('order_by_fields', [])
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
-        if not self._validate_fields(return_fields) or not self._validate_where_clause(additional_where_clause):
+
+        valid_select_fields = self._validate_fields(return_fields)
+        valid_where_clause = self._validate_where_clause(additional_where_clause)
+        valid_order_by_fields = self._validate_fields(order_by_fields)
+
+        if not (valid_select_fields and valid_where_clause and valid_order_by_fields):
             raise ValueError('Invalid query parameters')
 
-        if only_return_count:
+        if count_only:
             select_fields = 'COUNT(0)'
         else:
-            # Delimit and alias fields for query in double quotes, but ignore '*'
-            select_fields = [f if '.' in f else 'source.{0}'.format(f) for f in return_fields]
-            select_fields = '", "'.join('"."'.join(f.split('.')) for f in select_fields).join('""')
-            select_fields = select_fields.replace('"*"', '*')
-
+            select_fields = self._alias_fields(return_fields)
             if return_geometry:
                 select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
 
-        join = '' if only_return_count else self._build_join_clause(return_fields, additional_where_clause)
-        where, query_params = self._build_where_clause(additional_where_clause, only_return_count, **kwargs)
+        join, related_tables = '' if count_only else self._build_join_clause(return_fields, additional_where_clause)
+        where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
+        order_by = self._build_order_by_clause(order_by_fields, related_tables, limit, offset)
 
         with get_cursor() as c:
             # where clause may contain references to table and fields
-            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where}'
+            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by}'
             query_clause = query_clause.format(
-                fields=select_fields, table=self.table, join=join.strip(), where=where.strip()
+                fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by
             )
             c.execute(query_clause, query_params)
-            response = dictfetchall(c)
+            data = dictfetchall(c)
 
-        return response
+        return data
+
+    def _alias_fields(self, fields):
+        """ Delimit and alias fields for query in double quotes, but ignore '*' """
+
+        if not fields:
+            return '"source".*'
+
+        aliased_fields = [f if '.' in f else 'source.{0}'.format(f) for f in fields]
+        quoted_fields = '", "'.join('"."'.join(f.split('.')) for f in aliased_fields).join('""')
+
+        return quoted_fields.replace('"*"', '*')
 
     def _build_join_clause(self, fields, where, **kwargs):
-        if where is None:
-            return ''
+        if not fields and where is None:
+            return '', []
+        elif where is None:
+            query_fields = set(fields)
+        else:
+            query_fields = set(fields).union(self._parse_where_clause(where)[0])
 
-        query_fields = set(fields)
-        query_fields = query_fields.union(self._parse_where_clause(where)[0])
-
-        join_fields = query_fields.intersection(self.related_fields.keys())   # Filter by available related fields
-        join_fields = join_fields.union(f for f in query_fields if '*' in f)  # Ensure wildcard fields are included
-        join_fields = set(f[:f.index('.')] for f in join_fields)              # Derive distinct table prefixes
+        join_tables = query_fields.intersection(self.related_fields.keys())   # Filter by available related fields
+        join_tables = join_tables.union(f for f in query_fields if '*' in f)  # Ensure wildcard fields are included
+        join_tables = set(f[:f.index('.')] for f in join_tables)              # Derive distinct table prefixes
         join_clause = ''
 
-        for relation in self.featureservicelayerrelations_set.filter(related_title__in=join_fields):
+        relations = self.featureservicelayerrelations_set.filter(related_title__in=join_tables)
+
+        for relation in relations:
             join_clause += ' LEFT OUTER JOIN "{table}" AS "{related_title}"'.format(
                 table=relation.table, related_title=relation.related_title
             )
@@ -270,7 +288,7 @@ class FeatureServiceLayer(models.Model):
                 source=relation.source_column, related_title=relation.related_title, target=relation.target_column
             )
 
-        return join_clause
+        return join_clause, [r.related_title for r in relations]
 
     def _build_where_clause(self, where, count_only, **kwargs):
         """ :return: a Python format where clause with corresponding params for the SQL engine to escape """
@@ -329,6 +347,28 @@ class FeatureServiceLayer(models.Model):
             query_params.append(kwargs['extent'].as_sql_poly())
 
         return where_clause, query_params
+
+    def _build_order_by_clause(self, fields, related_tables=None, limit=0, offset=1000):
+        order_by_clause = 'ORDER BY {fields} LIMIT {limit} OFFSET {offset}'
+
+        def insert_field(field_list, field, index):
+            if field not in field_list:
+                field_list.insert(0, field)
+            elif field_list[0] != field:
+                field_list.remove(field)
+                field_list.insert(0, field)
+
+        order_by_fields = list(fields or '')
+
+        if related_tables is None:
+            if not order_by_fields:
+                insert_field(order_by_fields, PRIMARY_KEY_NAME, 0)  # Ensure ordering by primary key if nothing else
+        else:
+            relations = self.featureservicelayerrelations_set
+            for relation in relations.filter(related_title__in=related_tables).order_by('-related_index'):
+                insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
+
+        return order_by_clause.format(fields=self._alias_fields(order_by_fields), limit=limit, offset=offset)
 
     def _parse_where_clause(self, where):
         if where is None or where == '1=1':
@@ -514,7 +554,7 @@ class FeatureServiceLayer(models.Model):
         insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
             dataset_table_name=self.table,
             attribute_names=','.join(colnames_in_table),
-            placeholders=','.join('%s' for name in colnames_in_table),
+            placeholders=','.join(['%s'] * len(colnames_in_table)),
             primary_key=PRIMARY_KEY_NAME
         )
         set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(

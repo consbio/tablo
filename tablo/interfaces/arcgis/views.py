@@ -236,16 +236,23 @@ class QueryView(FeatureLayerView):
         if kwargs.get('outFields') and not return_ids_only:
             search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
 
+        if kwargs.get('orderByFields') and not return_ids_only:
+            search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
+
         if return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
             search_params['return_geometry'] = False
         elif kwargs.get('returnCountOnly', 'false').lower() == 'true':
-            search_params['only_return_count'] = True
+            search_params['count_only'] = True
         elif kwargs.get('returnGeometry', 'true').lower() == 'false':
             search_params['return_geometry'] = False
 
         try:
-            query_response = self.feature_service_layer.perform_query(**search_params)
+            query_response = self.feature_service_layer.perform_query(
+                limit=kwargs.get('limit', 1000),
+                offset=kwargs.get('offset', 0),
+                **search_params
+            )
         except (DatabaseError, ValueError):
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
