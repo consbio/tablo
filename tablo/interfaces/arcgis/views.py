@@ -215,6 +215,7 @@ class QueryView(FeatureLayerView):
     def handle_request(self, request, **kwargs):
 
         search_params = {}
+        limit, offset = kwargs.get('limit', 1000), kwargs.get('offset', 0)
         return_ids_only = kwargs.get('returnIdsOnly', 'false').lower() == 'true'
 
         if 'where' in kwargs and kwargs['where'] != '':
@@ -248,31 +249,36 @@ class QueryView(FeatureLayerView):
             search_params['return_geometry'] = False
 
         try:
-            query_response = self.feature_service_layer.perform_query(
-                limit=kwargs.get('limit', 1000),
-                offset=kwargs.get('offset', 0),
-                **search_params
-            )
+            # Query with limit plus one to determine if the limit excluded any features
+            query_response = self.feature_service_layer.perform_query(int(limit) + 1, offset, **search_params)
         except (DatabaseError, ValueError):
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
-        # When requesting selection IDs, ArcGIS sends both returnIdsOnly and returnCountOnly, but expects the response
-        # in the 'returnIdsOnly' format
-        if kwargs.get('returnIdsOnly'):
-            response = {
-                'count': len(query_response),
-                'objectIdFieldName': self.feature_service_layer.object_id_field,
-                'objectIds': [feature[self.feature_service_layer.object_id_field] for feature in query_response]
-            }
-        elif kwargs.get('returnCountOnly', 'false').lower() == 'true':
+        # When requesting selection IDs, ArcGIS sends both returnIdsOnly and returnCountOnly,
+        # but expects the response in the 'returnIdsOnly' format
+        if not kwargs.get('returnIdsOnly') and kwargs.get('returnCountOnly', 'false').lower() == 'true':
             response = {'count': query_response}
         else:
+            record_count = len(query_response)
+            exceeded_limit = record_count > int(limit)
+            query_response = query_response[:-1] if exceeded_limit else query_response
+
             response = {
                 'count': len(query_response),
-                'fields': self.feature_service_layer.fields,
-                'geometryType': 'esriGeometryPoint',
-                'features': covert_wkt_to_esri_feature(query_response)
+                'exceededTransferLimit': exceeded_limit
             }
+            if kwargs.get('returnIdsOnly'):
+                object_id_field = self.feature_service_layer.object_id_field
+                response['objectIdFieldName'] = object_id_field
+                response['objectIds'] = [feature[object_id_field] for feature in query_response]
+            else:
+                relations = self.feature_service_layer.featureservicelayerrelations_set.all()
+                response.update({
+                    'fields': self.feature_service_layer.fields,
+                    'relatedFields': {r.related_title: r.fields for r in relations},
+                    'geometryType': 'esriGeometryPoint',
+                    'features': covert_wkt_to_esri_feature(query_response)
+                })
 
         content = json.dumps(response, default=json_date_serializer)
         content_type = 'application/json'
