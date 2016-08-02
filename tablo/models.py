@@ -149,6 +149,7 @@ class FeatureServiceLayer(models.Model):
 
     _fields = None
     _related_fields = None
+    _relations = None
 
     @property
     def extent(self):
@@ -194,11 +195,17 @@ class FeatureServiceLayer(models.Model):
         return self._fields
 
     @property
+    def relations(self):
+        if self._relations is None:
+            self._relations = self.featureservicelayerrelations_set.all()
+        return self._relations
+
+    @property
     def related_fields(self):
         if self._related_fields is None:
             self._related_fields = {
                 '{table}.{field}'.format(table=r.related_title, field=f['name']): f
-                for r in self.featureservicelayerrelations_set.all() for f in r.fields
+                for r in self.relations for f in r.fields
             }
         return self._related_fields
 
@@ -214,7 +221,7 @@ class FeatureServiceLayer(models.Model):
         return None
 
     def perform_query(self, limit, offset, **kwargs):
-        count_only = kwargs.get('count_only', False)
+        count_only = kwargs.pop('count_only', False)
         return_fields = kwargs.get('return_fields', ['*'])
         return_geometry = kwargs.get('return_geometry', True)
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
@@ -235,16 +242,17 @@ class FeatureServiceLayer(models.Model):
         if count_only:
             select_fields = 'COUNT(0)'
         else:
-            select_fields = self._alias_fields(return_fields)
+            select_fields = '"source"."{pk}" AS "id", {select}'.format(
+                pk=PRIMARY_KEY_NAME, select=self._alias_fields(return_fields)
+            )
             if return_geometry:
                 select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
 
-        join, related_tables = '' if count_only else self._build_join_clause(return_fields, additional_where_clause)
+        join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
         where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
-        order_by = self._build_order_by_clause(order_by_fields, related_tables, limit, offset)
+        order_by = '' if count_only else self._build_order_by_clause(order_by_fields, related_tables, limit, offset)
 
         with get_cursor() as c:
-            # where clause may contain references to table and fields
             query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by}'
             query_clause = query_clause.format(
                 fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by
@@ -275,10 +283,10 @@ class FeatureServiceLayer(models.Model):
 
         join_tables = query_fields.intersection(self.related_fields.keys())   # Filter by available related fields
         join_tables = join_tables.union(f for f in query_fields if '*' in f)  # Ensure wildcard fields are included
-        join_tables = set(f[:f.index('.')] for f in join_tables)              # Derive distinct table prefixes
+        join_tables = set(f[:f.index('.')] for f in join_tables if '.' in f)  # Derive distinct table prefixes
         join_clause = ''
 
-        relations = self.featureservicelayerrelations_set.filter(related_title__in=join_tables)
+        relations = self.relations.filter(related_title__in=join_tables)
 
         for relation in relations:
             join_clause += ' LEFT OUTER JOIN "{table}" AS "{related_title}"'.format(
@@ -364,8 +372,7 @@ class FeatureServiceLayer(models.Model):
             if not order_by_fields:
                 insert_field(order_by_fields, PRIMARY_KEY_NAME, 0)  # Ensure ordering by primary key if nothing else
         else:
-            relations = self.featureservicelayerrelations_set
-            for relation in relations.filter(related_title__in=related_tables).order_by('-related_index'):
+            for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
                 insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
 
         return order_by_clause.format(fields=self._alias_fields(order_by_fields), limit=limit, offset=offset)
