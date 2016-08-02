@@ -203,10 +203,13 @@ class FeatureServiceLayer(models.Model):
     @property
     def related_fields(self):
         if self._related_fields is None:
-            self._related_fields = {
-                '{table}.{field}'.format(table=r.related_title, field=f['name']): f
-                for r in self.relations for f in r.fields
-            }
+            fields_by_title = ((r.related_title, f) for r in self.relations for f in r.fields)
+
+            self._related_fields = {}
+            for table, field in fields_by_title:
+                field_key = '{0}.{1}'.format(table, field['name'])
+                self.related_fields[field_key] = field
+
         return self._related_fields
 
     @property
