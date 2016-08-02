@@ -203,10 +203,11 @@ class FeatureServiceResource(ModelResource):
 
         if original_time_extent:
             new_time_extent = feature_service_layer.get_raw_time_extent()
-            if (
+            has_new_time_extent = (
                 new_time_extent[0] != original_time_extent[0] or
                 new_time_extent[1] != original_time_extent[1]
-            ):
+            )
+            if has_new_time_extent:
                 response_obj['new_time_extent'] = json.dumps(new_time_extent)
 
         return self.create_response(request, response_obj)
