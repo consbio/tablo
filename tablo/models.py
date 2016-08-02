@@ -381,7 +381,7 @@ class FeatureServiceLayer(models.Model):
         return order_by_clause.format(fields=self._alias_fields(order_by_fields), limit=limit, offset=offset)
 
     def _parse_where_clause(self, where):
-        if where is None or where == '1=1':
+        if where is None:
             return None
 
         parsed = sqlparse.parse('WHERE {where_clause}'.format(where_clause=where))
