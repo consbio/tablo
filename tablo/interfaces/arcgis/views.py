@@ -244,14 +244,15 @@ class QueryView(FeatureLayerView):
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
-        if kwargs.get('outFields') and not return_ids_only:
+        if not return_ids_only and kwargs.get('outFields'):
             search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
 
-        if kwargs.get('orderByFields') and not return_ids_only:
+        if not return_ids_only and kwargs.get('orderByFields'):
             search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
 
         if return_format == 'csv':
             search_params['return_geometry'] = False
+            search_params['order_by_fields'] = search_params['return_fields']  # Enforce order for batched queries
         elif return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
             search_params['return_geometry'] = False
