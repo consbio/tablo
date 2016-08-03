@@ -223,7 +223,7 @@ class FeatureServiceLayer(models.Model):
             }
         return None
 
-    def perform_query(self, limit, offset, **kwargs):
+    def perform_query(self, limit=0, offset=1000, **kwargs):
         count_only = kwargs.pop('count_only', False)
         return_fields = kwargs.get('return_fields', ['*'])
         return_geometry = kwargs.get('return_geometry', True)
@@ -253,12 +253,13 @@ class FeatureServiceLayer(models.Model):
 
         join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
         where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
-        order_by = '' if count_only else self._build_order_by_clause(order_by_fields, related_tables, limit, offset)
+        order_by = '' if count_only else self._build_order_by_clause(order_by_fields, related_tables)
 
         with get_cursor() as c:
-            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by}'
+            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
             query_clause = query_clause.format(
-                fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by
+                fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by,
+                limit_offset='LIMIT {limit} OFFSET {offset}'.format(limit=limit, offset=offset)
             )
             c.execute(query_clause, query_params)
             data = dictfetchall(c)
@@ -359,8 +360,8 @@ class FeatureServiceLayer(models.Model):
 
         return where_clause, query_params
 
-    def _build_order_by_clause(self, fields, related_tables=None, limit=0, offset=1000):
-        order_by_clause = 'ORDER BY {fields} LIMIT {limit} OFFSET {offset}'
+    def _build_order_by_clause(self, fields, related_tables=None):
+        order_by_clause = 'ORDER BY {fields}'
 
         def insert_field(field_list, field, index):
             if field not in field_list:
@@ -378,7 +379,7 @@ class FeatureServiceLayer(models.Model):
             for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
                 insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
 
-        return order_by_clause.format(fields=self._alias_fields(order_by_fields), limit=limit, offset=offset)
+        return order_by_clause.format(fields=self._alias_fields(order_by_fields))
 
     def _parse_where_clause(self, where):
         if where is None:
