@@ -219,8 +219,13 @@ class QueryView(FeatureLayerView):
         search_params = {}
         limit, offset = kwargs.get('limit', self.query_limit_default), kwargs.get('offset', 0)
 
+        # Capture format type: default anything but csv or json to json
+        valid_formats = {'csv', 'json'}
+        return_format = kwargs.get('f', 'json').lower()
+        return_format = return_format if return_format in valid_formats else 'json'
+
         # When requesting IDs, ArcGIS sends returnIdsOnly AND returnCountOnly, but expects the IDs response
-        return_ids_only = kwargs.get('returnIdsOnly', 'false').lower() == 'true'
+        return_ids_only = return_format == 'json' and kwargs.get('returnIdsOnly', 'false').lower() == 'true'
         return_count_only = not return_ids_only and kwargs.get('returnCountOnly', 'false').lower() == 'true'
 
         if 'where' in kwargs and kwargs['where'] != '':
@@ -245,7 +250,9 @@ class QueryView(FeatureLayerView):
         if kwargs.get('orderByFields') and not return_ids_only:
             search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
 
-        if return_ids_only:
+        if return_format == 'csv':
+            search_params['return_geometry'] = False
+        elif return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
             search_params['return_geometry'] = False
         elif return_count_only:
@@ -259,25 +266,30 @@ class QueryView(FeatureLayerView):
         except (DatabaseError, ValueError):
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
-        if return_count_only:
-            response = query_response[0]
-        else:
-            record_count = len(query_response)
-            exceeded_limit = record_count > int(limit)
-            query_response = query_response[:-1] if exceeded_limit else query_response
+        # Process limited query before calculating totals and counts
+        exceeded_limit = len(query_response) > int(limit)
+        query_response = query_response[:-1] if exceeded_limit else query_response
 
-            response = {
+        if return_count_only:
+            data = query_response[0]
+        elif return_format == 'csv':
+            header = query_response[0].keys()
+            data = [[h.strip('"').join('""') for h in header]]
+            for item in query_response:
+                data.append([str(item[field]).strip('"').join('""') for field in header])
+        else:
+            data = {
                 'count': len(query_response),
                 'total': len(query_response),
                 'exceededTransferLimit': exceeded_limit
             }
             if return_ids_only:
                 object_id_field = self.feature_service_layer.object_id_field
-                response['objectIdFieldName'] = object_id_field
-                response['objectIds'] = [feature[object_id_field] for feature in query_response]
+                data['objectIdFieldName'] = object_id_field
+                data['objectIds'] = [feature[object_id_field] for feature in query_response]
             else:
                 features = convert_wkt_to_esri_feature(query_response, self.feature_service_layer)
-                response.update({
+                data.update({
                     'count': len(features),        # Root level (source) features
                     'total': len(query_response),  # Total number of records queried
                     'fields': self.feature_service_layer.fields,
@@ -285,18 +297,28 @@ class QueryView(FeatureLayerView):
                     'features': features
                 })
 
-                if response['total'] > response['count']:
-                    response['relatedFields'] = {
+                if data['total'] > data['count']:
+                    data['relatedFields'] = {
                         r.related_title: r.fields for r in self.feature_service_layer.relations
                     }
 
-        content = json.dumps(response, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
+        if return_format == 'csv':
+            content = '\n'.join(','.join(col if isinstance(col, str) else str(col) for col in row) for row in data)
+            content_type = 'text/csv'
+        else:
+            content = json.dumps(data, default=json_date_serializer)
 
-        return HttpResponse(content=content, content_type=content_type)
+            if not self.callback:
+                content_type = 'application/json'
+            else:
+                content = '{callback}({data})'.format(callback=self.callback, data=content)
+                content_type = 'text/javascript'
+
+        response = HttpResponse(content=content, content_type=content_type)
+        if content_type == 'text/csv':
+            response['Content-Disposition'] = 'attachment; filename="query.csv"'
+
+        return response
 
 
 def generate_unique_value_renderer(classification_def, layer):
