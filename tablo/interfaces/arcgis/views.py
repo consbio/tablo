@@ -274,8 +274,10 @@ class QueryView(FeatureLayerView):
         if return_count_only:
             data = query_response[0]
         elif return_format == 'csv':
-            header = query_response[0].keys()
-            data = [[h.strip('"').join('""') for h in header]]
+            header = list(query_response[0].keys())
+            header.sort()
+
+            data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
             for item in query_response:
                 data.append([str(item[field]).strip('"').join('""') for field in header])
         else:
