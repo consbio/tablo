@@ -245,7 +245,7 @@ class FeatureServiceLayer(models.Model):
         if count_only:
             select_fields = 'COUNT(0)'
         else:
-            select_fields = '"source"."{pk}" AS "id", {select}'.format(
+            select_fields = '"source"."{pk}", {select}'.format(
                 pk=PRIMARY_KEY_NAME, select=self._alias_fields(return_fields)
             )
             if return_geometry:

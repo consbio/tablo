@@ -212,12 +212,12 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
-    query_limit_default = 1000
+    query_limit_default = 50000
 
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        limit, offset = kwargs.get('limit', self.query_limit_default), kwargs.get('offset', 0)
+        limit, offset = int(kwargs.get('limit', self.query_limit_default)), int(kwargs.get('offset', 0))
 
         # Capture format type: default anything but csv or json to json
         valid_formats = {'csv', 'json'}
@@ -252,7 +252,6 @@ class QueryView(FeatureLayerView):
 
         if return_format == 'csv':
             search_params['return_geometry'] = False
-            search_params['order_by_fields'] = search_params['return_fields']  # Enforce order for batched queries
         elif return_ids_only:
             search_params['return_fields'] = [self.feature_service_layer.object_id_field]
             search_params['return_geometry'] = False
@@ -427,7 +426,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 fk, pk = info['source'], info['target']
                 to_add = to_be_related[table]
 
-                item_hash = item_hash_format.format(id=item['id'], fk=fk, val=to_add[pk], table=table)
+                item_hash = item_hash_format.format(id=item['db_id'], fk=fk, val=to_add[pk], table=table)
                 if item_hash in already_added:
                     removed = to_be_related.pop(table)
                     related = already_added[item_hash]['related']
