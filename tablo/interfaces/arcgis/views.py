@@ -212,12 +212,12 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
-    query_limit_default = 1000
+    query_limit_default = 50000
 
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        limit, offset = kwargs.get('limit', self.query_limit_default), kwargs.get('offset', 0)
+        limit, offset = int(kwargs.get('limit', self.query_limit_default)), int(kwargs.get('offset', 0))
 
         # When requesting IDs, ArcGIS sends returnIdsOnly AND returnCountOnly, but expects the IDs response
         return_ids_only = kwargs.get('returnIdsOnly', 'false').lower() == 'true'
