@@ -250,10 +250,8 @@ class QueryView(FeatureLayerView):
         if not return_ids_only and kwargs.get('orderByFields'):
             search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
 
-        if return_format == 'csv':
-            search_params['return_geometry'] = False
-        elif return_ids_only:
-            search_params['return_fields'] = [self.feature_service_layer.object_id_field]
+        if return_ids_only:
+            search_params['ids_only'] = True
             search_params['return_geometry'] = False
         elif return_count_only:
             search_params['count_only'] = True
@@ -273,12 +271,20 @@ class QueryView(FeatureLayerView):
         if return_count_only:
             data = query_response[0]
         elif return_format == 'csv':
-            header = list(query_response[0].keys())
-            header.sort()
-
-            data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
-            for item in query_response:
-                data.append([str(item[field]).strip('"').join('""') for field in header])
+            data = []
+            if query_response:
+                header = list(query_response[0].keys())
+                if 'st_astext' in header:
+                    header.remove('st_astext')
+                    header.append('geometry_x_location')
+                    header.append('geometry_y_location')
+                data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
+                for item in query_response:
+                    if 'st_astext' in item:
+                        x_loc, y_loc = str(item['st_astext']).replace('POINT(','').replace(')', '').split(' ')
+                        item['geometry_x_location'] = x_loc
+                        item['geometry_y_location'] = y_loc
+                    data.append([str(item[field]).strip('"').join('""') for field in header])
         else:
             data = {
                 'count': len(query_response),
@@ -379,7 +385,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if f['name'] in query_fields}
+            'fields': {f['name'] for f in r.fields if (r.related_title + '.' + f['name']) in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}
@@ -391,7 +397,8 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
     features = []
 
     for item in response_items:
-        feature = {'attributes': item, 'related': {'count': 0}}
+        item['related'] = {}
+        feature = {'attributes': item}
 
         if 'st_astext' in item:
             # This only currently works for points
@@ -408,19 +415,24 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
 
         to_be_related = {}
 
-        for attr in (a for a in dict(item) if a not in layer_fields):
-            for table, info in joined_tables.items():
-                if attr in info['fields']:
-                    fk, pk = info['source'], info['target']
-                    to_add = item[attr] if attr == fk else item.pop(attr)
+        for attr in (a for a in dict(item) if a not in layer_fields and '.' in a):
+            relationship_name, attr_name = attr.split('.')
+            table = joined_tables[relationship_name]
+            if attr_name in table['fields']:
+                fk, pk = table['source'], table['target']
+                to_add = item[attr] if attr_name == fk else item.pop(attr)
 
-                    to_be_related.setdefault(table, {})[attr] = to_add
-                    to_be_related[table].setdefault(pk, item[fk])
+                to_be_related.setdefault(relationship_name, {})[attr_name] = to_add
+                to_be_related[relationship_name].setdefault(pk, item[fk])
 
         # Track source items by item hash, and append related information under unique source items
 
         if not to_be_related:
-            features.append(feature)
+            feature['attributes'].pop('related', None)
+            # We still may have done a join, just not returned any joined fields. Make sure we haven't already added.
+            if feature['attributes'][for_layer.object_id_field] not in already_added:
+                already_added[feature['attributes'][for_layer.object_id_field]] = feature
+                features.append(feature)
         else:
             for table, info in joined_tables.items():
                 fk, pk = info['source'], info['target']
@@ -429,14 +441,12 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 item_hash = item_hash_format.format(id=item['db_id'], fk=fk, val=to_add[pk], table=table)
                 if item_hash in already_added:
                     removed = to_be_related.pop(table)
-                    related = already_added[item_hash]['related']
+                    related = already_added[item_hash]['attributes']['related']
                     related.setdefault(table, []).append(removed)
                 else:
-                    related = feature['related']
+                    related = feature['attributes']['related']
                     related[table] = [to_add]
                     already_added[item_hash] = feature
-
-            related['count'] += 1
 
             if to_be_related:
                 features.append(feature)  # Some related fields have not been appended

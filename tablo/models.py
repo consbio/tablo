@@ -223,13 +223,16 @@ class FeatureServiceLayer(models.Model):
             }
         return None
 
-    def perform_query(self, limit=0, offset=1000, **kwargs):
+    def perform_query(self, limit=0, offset=0, **kwargs):
         count_only = kwargs.pop('count_only', False)
-        return_fields = kwargs.get('return_fields', ['*'])
+        ids_only = kwargs.pop('ids_only', False)
+        return_fields = kwargs.get('return_fields', ['*']) if not ids_only else [self.object_id_field]
         return_geometry = kwargs.get('return_geometry', True)
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
 
         additional_where_clause = kwargs.get('additional_where_clause')
+        additional_where_clause = additional_where_clause.replace('"', '') if additional_where_clause else None
+
         order_by_fields = kwargs.get('order_by_fields', [])
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
@@ -242,18 +245,25 @@ class FeatureServiceLayer(models.Model):
         if not (valid_select_fields and valid_where_clause and valid_order_by_fields):
             raise ValueError('Invalid query parameters')
 
+        expanded_fields = self._expand_return_fields(return_fields)
+
         if count_only:
             select_fields = 'COUNT(0)'
+        elif ids_only:
+            select_fields = 'DISTINCT {0}'.format(self._alias_fields(return_fields))
+            order_by_fields = [return_fields]  # Order by can only be used on return_fields with distinct
         else:
-            select_fields = '"source"."{pk}", {select}'.format(
-                pk=PRIMARY_KEY_NAME, select=self._alias_fields(return_fields)
-            )
+            select_fields = '{select}'.format(select=', '.join(expanded_fields))
             if return_geometry:
                 select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
 
         join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
         where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
-        order_by = '' if count_only else self._build_order_by_clause(order_by_fields, related_tables)
+        if not count_only:
+            if ids_only:
+                order_by = self._build_order_by_clause([self.object_id_field])
+            else:
+                order_by = self._build_order_by_clause(order_by_fields, related_tables)
 
         with get_cursor() as c:
             query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
@@ -276,6 +286,26 @@ class FeatureServiceLayer(models.Model):
         quoted_fields = '", "'.join('"."'.join(f.split('.')) for f in aliased_fields).join('""')
 
         return quoted_fields.replace('"*"', '*')
+
+    def _expand_return_fields(self, return_fields):
+        related_return_fields = [r for r in return_fields if '.' in r]
+
+        if not related_return_fields:
+            return [self._alias_fields([r]) for r in return_fields]
+
+        expanded_fields = []
+        for return_field in return_fields:
+            if return_field == '*':
+                for f in self.fields:
+                    expanded_fields.append('{0} AS "{1}"'.format(self._alias_fields([f['name']]), f['name']))
+            elif return_field.endswith('.*'):
+                relationship_name = return_field[:-2]
+                for r in (x for x in self.related_fields if x.startswith(relationship_name + '.')):
+                    expanded_fields.append('{0} AS "{1}"'.format(self._alias_fields([r]), r))
+            else:
+                expanded_fields.append('{0} AS "{1}"'.format(self._alias_fields([return_field]), return_field))
+
+        return expanded_fields
 
     def _build_join_clause(self, fields, where, **kwargs):
         if not fields and where is None:
@@ -427,9 +457,15 @@ class FeatureServiceLayer(models.Model):
             raise ValueError('Invalid field')
 
         unique_values = []
+        field_name = field
+        table = self.table
+        if '.' in field:
+            relationship_name, field_name = field.split('.')
+            table = self.relations.filter(related_title=relationship_name).first().table
+
         with get_cursor() as c:
             c.execute('SELECT distinct {field_name} FROM {table} ORDER BY {field_name}'.format(
-                table=self.table, field_name=field
+                table=table, field_name=field_name
             ))
             for row in c.fetchall():
                 unique_values.append(row[0])
