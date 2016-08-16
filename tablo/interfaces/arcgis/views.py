@@ -274,14 +274,17 @@ class QueryView(FeatureLayerView):
             data = []
             if query_response:
                 header = list(query_response[0].keys())
-                if 'st_astext' in header:
+                has_geometry = 'st_astext' in header
+
+                if has_geometry:
                     header.remove('st_astext')
                     header.append('geometry_x_location')
                     header.append('geometry_y_location')
+
                 data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
                 for item in query_response:
-                    if 'st_astext' in item:
-                        x_loc, y_loc = str(item['st_astext']).replace('POINT(','').replace(')', '').split(' ')
+                    if has_geometry:
+                        x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
                         item['geometry_x_location'] = x_loc
                         item['geometry_y_location'] = y_loc
                     data.append([str(item[field]).strip('"').join('""') for field in header])
@@ -378,6 +381,8 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
     # Gather related table information to ensure fields are correctly represented
 
     query_fields = {f for f in response_items[0]}
+    has_geometry = 'st_astext' in query_fields
+
     layer_fields = {f['name'] for f in for_layer.fields if f['name'] in query_fields}
     layer_fields.add('id')  # Ensures related items are placed correctly even when fk appears more than once in source
 
@@ -385,7 +390,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if (r.related_title + '.' + f['name']) in query_fields}
+            'fields': {f['name'] for f in r.fields if f['alias'] in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}
@@ -400,7 +405,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         item['related'] = {}
         feature = {'attributes': item}
 
-        if 'st_astext' in item:
+        if has_geometry:
             # This only currently works for points
 
             point_text = item.pop('st_astext')
@@ -416,24 +421,29 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         to_be_related = {}
 
         for attr in (a for a in dict(item) if a not in layer_fields and '.' in a):
-            relationship_name, attr_name = attr.split('.')
-            table = joined_tables[relationship_name]
+            related_title, attr_name = attr.split('.')
+            table = joined_tables[related_title]
+
             if attr_name in table['fields']:
                 fk, pk = table['source'], table['target']
-                to_add = item[attr] if attr_name == fk else item.pop(attr)
+                to_add = item[attr] if attr == fk else item.pop(attr)
 
-                to_be_related.setdefault(relationship_name, {})[attr_name] = to_add
-                to_be_related[relationship_name].setdefault(pk, item[fk])
+                to_be_related.setdefault(related_title, {})[attr_name] = to_add
+                to_be_related[related_title].setdefault(pk, item[fk])
 
         # Track source items by item hash, and append related information under unique source items
 
         if not to_be_related:
-            feature['attributes'].pop('related', None)
-            # We still may have done a join, just not returned any joined fields. Make sure we haven't already added.
-            if feature['attributes'][for_layer.object_id_field] not in already_added:
-                already_added[feature['attributes'][for_layer.object_id_field]] = feature
+            # Prevent duplicate base items when related items have been queried
+
+            item.pop('related', None)
+            item_hash = item[for_layer.object_id_field]
+            if item_hash not in already_added:
+                already_added[item_hash] = feature
                 features.append(feature)
         else:
+            # Append distinct base items with related items nested under each
+
             for table, info in joined_tables.items():
                 fk, pk = info['source'], info['target']
                 to_add = to_be_related[table]
