@@ -53,8 +53,8 @@ def get_jenks_breaks(data_list, num_classes):
     kclass[num_classes] = float(data_list[len(data_list) - 1])
     count_num = num_classes
     while count_num >= 2:
-        id = int((mat1[k][count_num]) - 2)
-        kclass[count_num - 1] = data_list[id]
+        pk = int((mat1[k][count_num]) - 2)
+        kclass[count_num - 1] = data_list[pk]
         k = int((mat1[k][count_num] - 1))
         count_num -= 1
     return kclass
