@@ -5,6 +5,7 @@ import re
 import uuid
 import sqlparse
 
+from collections import OrderedDict
 from datetime import datetime
 from django.conf import settings
 from django.db import models, DatabaseError, connection
@@ -60,7 +61,7 @@ def get_fields(for_table):
                 'SELECT column_name, is_nullable, data_type',
                 'FROM information_schema.columns',
                 'WHERE table_name = %s',
-                'ORDER BY column_name;'
+                'ORDER BY ordinal_position;'
             )),
             [for_table]
         )
@@ -211,7 +212,7 @@ class FeatureServiceLayer(models.Model):
     def related_fields(self):
         if self._related_fields is None:
 
-            self._related_fields = {}
+            self._related_fields = OrderedDict()
             for field in (f for r in self.relations for f in r.fields):
                 field_key = field['alias']  # Will be related_title.field
                 self.related_fields[field_key] = field
