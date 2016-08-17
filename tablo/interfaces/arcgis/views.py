@@ -217,7 +217,8 @@ class QueryView(FeatureLayerView):
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        limit, offset = int(kwargs.get('limit', self.query_limit_default)), int(kwargs.get('offset', 0))
+        limit = int(kwargs.get('limit', self.query_limit_default))
+        offset = int(kwargs.get('offset', 0))
 
         # Capture format type: default anything but csv or json to json
         valid_formats = {'csv', 'json'}
