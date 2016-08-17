@@ -288,7 +288,7 @@ class QueryView(FeatureLayerView):
                         x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
                         item['geometry_x_location'] = x_loc
                         item['geometry_y_location'] = y_loc
-                    data.append([str(item[field]).strip('"').join('""') for field in header])
+                    data.append([str(item[field]).replace('"', '""').strip('"').join('""') for field in header])
         else:
             data = {
                 'count': len(query_response),
