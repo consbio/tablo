@@ -1,4 +1,4 @@
-# tablo
+# Tablo
 
 ## What is it?
 
@@ -9,7 +9,7 @@ stored within a PostGIS database.
 
 To keep things separate, you will most likely want to work within a python virtual environment. This just makes
 things easier to manage in general. A good tool for managing virtual environments can be found at
-[https://virtualenvwrapper.readthedocs.io/en/latest/].
+https://virtualenvwrapper.readthedocs.io/en/latest/.
 
 Tablo has been written to support Python 3.5, so you will need to make sure your virtual environment is using
 Python 3.5.
@@ -25,11 +25,11 @@ Tablo are:
 #### Setting up a PostGIS database
 
 The scope of this document is not large enough to encapsulate all that is required in installing a PostGIS database.
-See [http://postgis.net/install/] for information on how to install it on your own system (or on a remote server).
+See http://postgis.net/install/ for information on how to install it on your own system (or on a remote server).
 
 #### Setting up a Django Project
 
-See [https://docs.djangoproject.com/en/1.8/intro/tutorial01/#creating-a-project] for instructions on how to set up
+See https://docs.djangoproject.com/en/1.8/intro/tutorial01/#creating-a-project for instructions on how to set up
 a Django project. Tablo was tested using Django version 1.8.6.
 
 For example, you could create a project called tablo_project by issuing the command:
@@ -41,9 +41,9 @@ Anywhere in this documentation where it refers to the Django project, it will be
 
 Tablo relies on a few libraries that can often be more difficult to install. These include:
 
-* pyproj [https://github.com/jswhit/pyproj]
-* lxml (via messytables) [http://lxml.de/]
-* GDAL [https://pypi.python.org/pypi/GDAL/]
+* pyproj (https://github.com/jswhit/pyproj)
+* lxml (via messytables) (http://lxml.de/)
+* GDAL (https://pypi.python.org/pypi/GDAL/)
 
 See these websites to install these libraries first, as they may depend on other executables existing in your
 environment.
