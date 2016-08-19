@@ -217,10 +217,16 @@ class QueryView(FeatureLayerView):
     def handle_request(self, request, **kwargs):
 
         search_params = {}
-        limit, offset = int(kwargs.get('limit', self.query_limit_default)), int(kwargs.get('offset', 0))
+        limit = int(kwargs.get('limit', self.query_limit_default))
+        offset = int(kwargs.get('offset', 0))
+
+        # Capture format type: default anything but csv or json to json
+        valid_formats = {'csv', 'json'}
+        return_format = kwargs.get('f', 'json').lower()
+        return_format = return_format if return_format in valid_formats else 'json'
 
         # When requesting IDs, ArcGIS sends returnIdsOnly AND returnCountOnly, but expects the IDs response
-        return_ids_only = kwargs.get('returnIdsOnly', 'false').lower() == 'true'
+        return_ids_only = return_format == 'json' and kwargs.get('returnIdsOnly', 'false').lower() == 'true'
         return_count_only = not return_ids_only and kwargs.get('returnCountOnly', 'false').lower() == 'true'
 
         if 'where' in kwargs and kwargs['where'] != '':
@@ -239,14 +245,14 @@ class QueryView(FeatureLayerView):
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
-        if kwargs.get('outFields') and not return_ids_only:
+        if not return_ids_only and kwargs.get('outFields'):
             search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
 
-        if kwargs.get('orderByFields') and not return_ids_only:
+        if not return_ids_only and kwargs.get('orderByFields'):
             search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
 
         if return_ids_only:
-            search_params['return_fields'] = [self.feature_service_layer.object_id_field]
+            search_params['ids_only'] = True
             search_params['return_geometry'] = False
         elif return_count_only:
             search_params['count_only'] = True
@@ -259,25 +265,43 @@ class QueryView(FeatureLayerView):
         except (DatabaseError, ValueError):
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
-        if return_count_only:
-            response = query_response[0]
-        else:
-            record_count = len(query_response)
-            exceeded_limit = record_count > int(limit)
-            query_response = query_response[:-1] if exceeded_limit else query_response
+        # Process limited query before calculating totals and counts
+        exceeded_limit = len(query_response) > int(limit)
+        query_response = query_response[:-1] if exceeded_limit else query_response
 
-            response = {
+        if return_count_only:
+            data = query_response[0]
+        elif return_format == 'csv':
+            data = []
+            if query_response:
+                header = list(query_response[0].keys())
+                has_geometry = 'st_astext' in header
+
+                if has_geometry:
+                    header.remove('st_astext')
+                    header.append('geometry_x_location')
+                    header.append('geometry_y_location')
+
+                data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
+                for item in query_response:
+                    if has_geometry:
+                        x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
+                        item['geometry_x_location'] = x_loc
+                        item['geometry_y_location'] = y_loc
+                    data.append([str(item[field]).replace('"', '""').strip('"').join('""') for field in header])
+        else:
+            data = {
                 'count': len(query_response),
                 'total': len(query_response),
                 'exceededTransferLimit': exceeded_limit
             }
             if return_ids_only:
                 object_id_field = self.feature_service_layer.object_id_field
-                response['objectIdFieldName'] = object_id_field
-                response['objectIds'] = [feature[object_id_field] for feature in query_response]
+                data['objectIdFieldName'] = object_id_field
+                data['objectIds'] = [feature[object_id_field] for feature in query_response]
             else:
                 features = convert_wkt_to_esri_feature(query_response, self.feature_service_layer)
-                response.update({
+                data.update({
                     'count': len(features),        # Root level (source) features
                     'total': len(query_response),  # Total number of records queried
                     'fields': self.feature_service_layer.fields,
@@ -285,18 +309,28 @@ class QueryView(FeatureLayerView):
                     'features': features
                 })
 
-                if response['total'] > response['count']:
-                    response['relatedFields'] = {
+                if data['total'] > data['count']:
+                    data['relatedFields'] = {
                         r.related_title: r.fields for r in self.feature_service_layer.relations
                     }
 
-        content = json.dumps(response, default=json_date_serializer)
-        content_type = 'application/json'
-        if self.callback:
-            content = '{callback}({data})'.format(callback=self.callback, data=content)
-            content_type = 'text/javascript'
+        if return_format == 'csv':
+            content = '\n'.join(','.join(col if isinstance(col, str) else str(col) for col in row) for row in data)
+            content_type = 'text/csv'
+        else:
+            content = json.dumps(data, default=json_date_serializer)
 
-        return HttpResponse(content=content, content_type=content_type)
+            if not self.callback:
+                content_type = 'application/json'
+            else:
+                content = '{callback}({data})'.format(callback=self.callback, data=content)
+                content_type = 'text/javascript'
+
+        response = HttpResponse(content=content, content_type=content_type)
+        if content_type == 'text/csv':
+            response['Content-Disposition'] = 'attachment; filename="query.csv"'
+
+        return response
 
 
 def generate_unique_value_renderer(classification_def, layer):
@@ -348,6 +382,8 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
     # Gather related table information to ensure fields are correctly represented
 
     query_fields = {f for f in response_items[0]}
+    has_geometry = 'st_astext' in query_fields
+
     layer_fields = {f['name'] for f in for_layer.fields if f['name'] in query_fields}
     layer_fields.add('id')  # Ensures related items are placed correctly even when fk appears more than once in source
 
@@ -355,7 +391,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if f['name'] in query_fields}
+            'fields': {f['name'] for f in r.fields if f['alias'] in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}
@@ -367,9 +403,10 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
     features = []
 
     for item in response_items:
-        feature = {'attributes': item, 'related': {'count': 0}}
+        item['related'] = {}
+        feature = {'attributes': item}
 
-        if 'st_astext' in item:
+        if has_geometry:
             # This only currently works for points
 
             point_text = item.pop('st_astext')
@@ -384,35 +421,43 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
 
         to_be_related = {}
 
-        for attr in (a for a in dict(item) if a not in layer_fields):
-            for table, info in joined_tables.items():
-                if attr in info['fields']:
-                    fk, pk = info['source'], info['target']
-                    to_add = item[attr] if attr == fk else item.pop(attr)
+        for attr in (a for a in dict(item) if a not in layer_fields and '.' in a):
+            related_title, attr_name = attr.split('.')
+            table = joined_tables[related_title]
 
-                    to_be_related.setdefault(table, {})[attr] = to_add
-                    to_be_related[table].setdefault(pk, item[fk])
+            if attr_name in table['fields']:
+                fk, pk = table['source'], table['target']
+                to_add = item[attr] if attr == fk else item.pop(attr)
+
+                to_be_related.setdefault(related_title, {})[attr_name] = to_add
+                to_be_related[related_title].setdefault(pk, item[fk])
 
         # Track source items by item hash, and append related information under unique source items
 
         if not to_be_related:
-            features.append(feature)
+            # Prevent duplicate base items when related items have been queried
+
+            item.pop('related', None)
+            item_hash = item[for_layer.object_id_field]
+            if item_hash not in already_added:
+                already_added[item_hash] = feature
+                features.append(feature)
         else:
+            # Append distinct base items with related items nested under each
+
             for table, info in joined_tables.items():
                 fk, pk = info['source'], info['target']
                 to_add = to_be_related[table]
 
-                item_hash = item_hash_format.format(id=item['id'], fk=fk, val=to_add[pk], table=table)
+                item_hash = item_hash_format.format(id=item['db_id'], fk=fk, val=to_add[pk], table=table)
                 if item_hash in already_added:
                     removed = to_be_related.pop(table)
-                    related = already_added[item_hash]['related']
+                    related = already_added[item_hash]['attributes']['related']
                     related.setdefault(table, []).append(removed)
                 else:
-                    related = feature['related']
+                    related = feature['attributes']['related']
                     related[table] = [to_add]
                     already_added[item_hash] = feature
-
-            related['count'] += 1
 
             if to_be_related:
                 features.append(feature)  # Some related fields have not been appended

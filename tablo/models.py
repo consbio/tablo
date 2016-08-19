@@ -5,10 +5,12 @@ import re
 import uuid
 import sqlparse
 
+from collections import OrderedDict
 from datetime import datetime
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
+from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
 from tablo.utils import get_jenks_breaks, dictfetchall
@@ -55,7 +57,12 @@ def get_fields(for_table):
     fields = []
     with connection.cursor() as c:
         c.execute(
-            'select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;',
+            ' '.join((
+                'SELECT column_name, is_nullable, data_type',
+                'FROM information_schema.columns',
+                'WHERE table_name = %s',
+                'ORDER BY ordinal_position;'
+            )),
             [for_table]
         )
         # c.description won't be populated without first running the query above
@@ -184,6 +191,7 @@ class FeatureServiceLayer(models.Model):
     @property
     def fields(self):
         if self._fields is None:
+
             fields = get_fields(self.table)
             for field in fields:
                 if field['name'] == 'db_id':
@@ -203,11 +211,10 @@ class FeatureServiceLayer(models.Model):
     @property
     def related_fields(self):
         if self._related_fields is None:
-            fields_by_title = ((r.related_title, f) for r in self.relations for f in r.fields)
 
-            self._related_fields = {}
-            for table, field in fields_by_title:
-                field_key = '{0}.{1}'.format(table, field['name'])
+            self._related_fields = OrderedDict()
+            for field in (f for r in self.relations for f in r.fields):
+                field_key = field['alias']  # Will be related_title.field
                 self.related_fields[field_key] = field
 
         return self._related_fields
@@ -223,37 +230,43 @@ class FeatureServiceLayer(models.Model):
             }
         return None
 
-    def perform_query(self, limit=0, offset=1000, **kwargs):
+    def perform_query(self, limit=0, offset=0, **kwargs):
         count_only = kwargs.pop('count_only', False)
+        ids_only = kwargs.pop('ids_only', False)
         return_fields = kwargs.get('return_fields', ['*'])
         return_geometry = kwargs.get('return_geometry', True)
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
 
         additional_where_clause = kwargs.get('additional_where_clause')
+        additional_where_clause = additional_where_clause.replace('"', '') if additional_where_clause else None
+
         order_by_fields = kwargs.get('order_by_fields', [])
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
 
-        valid_select_fields = self._validate_fields(return_fields)
+        valid_select_fields = ids_only or self._validate_fields(return_fields)
         valid_where_clause = self._validate_where_clause(additional_where_clause)
-        valid_order_by_fields = self._validate_fields(order_by_fields)
+        valid_order_by_fields = ids_only or self._validate_fields(order_by_fields)
 
         if not (valid_select_fields and valid_where_clause and valid_order_by_fields):
             raise ValueError('Invalid query parameters')
 
         if count_only:
             select_fields = 'COUNT(0)'
+        elif ids_only:
+            return_fields = order_by_fields = [self.object_id_field]
+            select_fields = 'DISTINCT {0}'.format(self._alias_fields(return_fields))
         else:
-            select_fields = '"source"."{pk}", {select}'.format(
-                pk=PRIMARY_KEY_NAME, select=self._alias_fields(return_fields)
-            )
+            select_fields = self._expand_fields(return_fields)
             if return_geometry:
                 select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
 
         join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
         where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
-        order_by = '' if count_only else self._build_order_by_clause(order_by_fields, related_tables)
+        order_by = '' if count_only else self._build_order_by_clause(
+            fields=order_by_fields, related_tables=(None if ids_only else related_tables)
+        )
 
         with get_cursor() as c:
             query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
@@ -271,11 +284,35 @@ class FeatureServiceLayer(models.Model):
 
         if not fields:
             return '"source".*'
+        elif isinstance(fields, str):
+            fields = [fields]
 
         aliased_fields = [f if '.' in f else 'source.{0}'.format(f) for f in fields]
         quoted_fields = '", "'.join('"."'.join(f.split('.')) for f in aliased_fields).join('""')
 
         return quoted_fields.replace('"*"', '*')
+
+    def _expand_fields(self, fields, alias_only=False):
+        """ Expand '*' in fields to those that will be queried, and optionally alias them to avoid clashes """
+
+        if not any('.' in f for f in fields):
+            return self._alias_fields(fields)
+
+        fields_to_expand = [self.object_id_field]
+        fields_to_expand.extend(r.source_column for r in self.relations)
+
+        for field in fields:
+            if field == '*':
+                fields_to_expand.extend(f['name'] for f in self.fields)
+            elif field.endswith('.*'):
+                related_prefix = field[:-1]
+                fields_to_expand.extend(f for f in self.related_fields if f.startswith(related_prefix))
+            else:
+                fields_to_expand.append(field)
+
+        field_format = '"{1}"' if alias_only else '{0} AS "{1}"'
+
+        return ', '.join(field_format.format(self._alias_fields(f), f) for f in OrderedSet(fields_to_expand))
 
     def _build_join_clause(self, fields, where, **kwargs):
         if not fields and where is None:
@@ -379,7 +416,7 @@ class FeatureServiceLayer(models.Model):
             for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
                 insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
 
-        return order_by_clause.format(fields=self._alias_fields(order_by_fields))
+        return order_by_clause.format(fields=self._expand_fields(order_by_fields, alias_only=True))
 
     def _parse_where_clause(self, where):
         if where is None:
@@ -427,9 +464,15 @@ class FeatureServiceLayer(models.Model):
             raise ValueError('Invalid field')
 
         unique_values = []
+        field_name = field
+        table = self.table
+        if '.' in field:
+            relationship_name, field_name = field.split('.')
+            table = self.relations.filter(related_title=relationship_name).first().table
+
         with get_cursor() as c:
             c.execute('SELECT distinct {field_name} FROM {table} ORDER BY {field_name}'.format(
-                table=self.table, field_name=field
+                table=table, field_name=field_name
             ))
             for row in c.fetchall():
                 unique_values.append(row[0])
@@ -679,7 +722,12 @@ class FeatureServiceLayerRelations(models.Model):
     @property
     def fields(self):
         if self._fields is None:
-            self._fields = get_fields(self.table)
+
+            fields = get_fields(self.table)
+            for field in fields:
+                field['alias'] = '{0}.{1}'.format(self.related_title, field['name'])
+            self._fields = fields
+
         return self._fields
 
     @property
