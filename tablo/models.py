@@ -17,7 +17,7 @@ from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.geom_utils import Extent, SpatialReference
 
 
-TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
