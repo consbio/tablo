@@ -1,4 +1,6 @@
 import json
+from collections import OrderedDict
+
 from tastypie.fields import CharField
 
 
@@ -51,8 +53,8 @@ def get_jenks_breaks(data_list, num_classes):
     kclass[num_classes] = float(data_list[len(data_list) - 1])
     count_num = num_classes
     while count_num >= 2:
-        id = int((mat1[k][count_num]) - 2)
-        kclass[count_num - 1] = data_list[id]
+        pk = int((mat1[k][count_num]) - 2)
+        kclass[count_num - 1] = data_list[pk]
         k = int((mat1[k][count_num] - 1))
         count_num -= 1
     return kclass
@@ -94,7 +96,7 @@ def dictfetchall(cursor):
     "Returns all rows from a cursor as a dict"
     desc = cursor.description
     return [
-        dict(zip([col[0] for col in desc], row))
+        OrderedDict(zip([col[0] for col in desc], row))
         for row in cursor.fetchall()
     ]
 
