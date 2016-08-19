@@ -449,7 +449,10 @@ class FeatureServiceLayer(models.Model):
     def _validate_where_clause(self, where):
 
         parsed = self._parse_where_clause(where)
-        if parsed is not None and parsed[1]:
+
+        if parsed is None:
+            return
+        elif parsed[1]:
             raise SQLInjectionError('Invalid where clause')
 
         self._validate_fields(parsed[0])
