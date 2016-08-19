@@ -12,6 +12,7 @@ from django.views.generic import DetailView, View
 
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
+from tablo.exceptions import InvalidFieldsError
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
 
@@ -262,7 +263,10 @@ class QueryView(FeatureLayerView):
         try:
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(int(limit) + 1, offset, **search_params)
-        except (DatabaseError, ValueError):
+        except InvalidFieldsError as ex:
+            return HttpResponseBadRequest(json.dumps({'error': ex.message}))
+        except DatabaseError:
+            # Any generic database error, or failed validation of SQL injection
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
         # Process limited query before calculating totals and counts

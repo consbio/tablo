@@ -13,8 +13,9 @@ from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
-from tablo.utils import get_jenks_breaks, dictfetchall
+from tablo.exceptions import InvalidFieldsError, SQLInjectionError
 from tablo.geom_utils import Extent, SpatialReference
+from tablo.utils import get_jenks_breaks, dictfetchall
 
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
@@ -233,7 +234,7 @@ class FeatureServiceLayer(models.Model):
     def perform_query(self, limit=0, offset=0, **kwargs):
         count_only = kwargs.pop('count_only', False)
         ids_only = kwargs.pop('ids_only', False)
-        return_fields = kwargs.get('return_fields', ['*'])
+        return_fields = kwargs.get('return_fields', '*')
         return_geometry = kwargs.get('return_geometry', True)
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
 
@@ -245,12 +246,13 @@ class FeatureServiceLayer(models.Model):
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
 
-        valid_select_fields = ids_only or self._validate_fields(return_fields)
-        valid_where_clause = self._validate_where_clause(additional_where_clause)
-        valid_order_by_fields = ids_only or self._validate_fields(order_by_fields)
+        if not ids_only:
+            self._validate_fields(return_fields)
+            self._validate_fields(order_by_fields)
 
-        if not (valid_select_fields and valid_where_clause and valid_order_by_fields):
-            raise ValueError('Invalid query parameters')
+        self._validate_where_clause(additional_where_clause)
+
+        # Build SELECT, JOIN, WHERE and ORDER BY from inputs, and execute
 
         if count_only:
             select_fields = 'COUNT(0)'
@@ -268,16 +270,15 @@ class FeatureServiceLayer(models.Model):
             fields=order_by_fields, related_tables=(None if ids_only else related_tables)
         )
 
-        with get_cursor() as c:
-            query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
-            query_clause = query_clause.format(
-                fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by,
-                limit_offset='LIMIT {limit} OFFSET {offset}'.format(limit=limit, offset=offset)
-            )
-            c.execute(query_clause, query_params)
-            data = dictfetchall(c)
+        query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
+        query_clause = query_clause.format(
+            fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by,
+            limit_offset='LIMIT {limit} OFFSET {offset}'.format(limit=limit, offset=offset)
+        )
 
-        return data
+        with get_cursor() as c:
+            c.execute(query_clause, query_params)
+            return dictfetchall(c)
 
     def _alias_fields(self, fields):
         """ Delimit and alias fields for query in double quotes, but ignore '*' """
@@ -285,7 +286,7 @@ class FeatureServiceLayer(models.Model):
         if not fields:
             return '"source".*'
         elif isinstance(fields, str):
-            fields = [fields]
+            fields = fields.split(',')
 
         aliased_fields = [f if '.' in f else 'source.{0}'.format(f) for f in fields]
         quoted_fields = '", "'.join('"."'.join(f.split('.')) for f in aliased_fields).join('""')
@@ -295,6 +296,8 @@ class FeatureServiceLayer(models.Model):
     def _expand_fields(self, fields, alias_only=False):
         """ Expand '*' in fields to those that will be queried, and optionally alias them to avoid clashes """
 
+        if isinstance(fields, str):
+            fields = fields.split(',')
         if not any('.' in f for f in fields):
             return self._alias_fields(fields)
 
@@ -430,27 +433,28 @@ class FeatureServiceLayer(models.Model):
     def _validate_where_clause(self, where):
 
         parsed = self._parse_where_clause(where)
+        if parsed is not None and parsed[1]:
+            raise SQLInjectionError('Invalid where clause')
 
-        if parsed is None:
-            return True
-        elif parsed[1]:
-            return False  # More than one statement means SQL injection.
-        else:
-            return self._validate_fields(parsed[0])
+        self._validate_fields(parsed[0])
 
     def _validate_fields(self, fields):
+        if isinstance(fields, str):
+            fields = fields.split(',')
+
         query_fields = {field.replace('"', '') for field in fields if '*' not in field}
         if not query_fields:
             return True
-        else:
-            valid_fields = set(r for r in self.related_fields).union(f['name'] for f in self.fields)
-            return query_fields.issubset(valid_fields)
+
+        valid_fields = set(r for r in self.related_fields).union(f['name'] for f in self.fields)
+        invalid_fields = query_fields.difference(valid_fields)
+
+        if invalid_fields:
+            raise InvalidFieldsError('Invalid fields: {0}', ', '.join(invalid_fields))
 
     def get_distinct_geometries_across_time(self, *kwargs):
-        time_query = 'SELECT DISTINCT ST_AsText({geom_field}), count(*) FROM {table} GROUP BY ST_AsText({geom_field})'.format(
-            geom_field=POINT_FIELD_NAME,
-            table=self.table
-        )
+        time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'
+        time_query = time_query.format(geom_field=POINT_FIELD_NAME, table=self.table)
 
         with get_cursor() as c:
             c.execute(time_query)
@@ -460,8 +464,7 @@ class FeatureServiceLayer(models.Model):
 
     def get_unique_values(self, field):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         unique_values = []
         field_name = field
@@ -480,8 +483,7 @@ class FeatureServiceLayer(models.Model):
 
     def get_equal_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         breaks = []
 
@@ -503,25 +505,24 @@ class FeatureServiceLayer(models.Model):
 
     def get_quantile_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         sql_statement = """
-            SELECT all_data.{field} FROM
-                (SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number,
-                        {field}
-                   FROM {table}
-                  WHERE {field} IS NOT NULL
-                  ORDER BY {field}) all_data,
-                (SELECT ROUND((COUNT(*)/{break_count}),0) AS how_many
-                   FROM {table} serviceTable
-                  WHERE serviceTable.{field} IS NOT NULL) count_table
-            WHERE MOD(row_number,how_many)=0
-            ORDER BY all_data.{field}""".format(
-            field=field,
-            table=self.table,
-            break_count=break_count
-        )
+            SELECT all_data.{field}
+            FROM (
+                SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {field}
+                FROM {table}
+                WHERE {field} IS NOT NULL
+                ORDER BY {field}
+            ) all_data, (
+                SELECT ROUND((COUNT(0) / {break_count}), 0) AS how_many
+                FROM {table} serviceTable
+                WHERE serviceTable.{field} IS NOT NULL
+            ) count_table
+            WHERE MOD(row_number,how_many) = 0
+            ORDER BY all_data.{field}
+        """.format(field=field, table=self.table, break_count=break_count)
+
         values = []
 
         with get_cursor() as c:
@@ -542,30 +543,31 @@ class FeatureServiceLayer(models.Model):
 
     def get_natural_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
-        sql_statement = """SELECT service_table.{field} FROM
-                            (SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number,
-                            {primary_key}
-                                   FROM {table}
-                                  WHERE {field} IS NOT NULL
-                                  ORDER BY {field}) all_data,
-                                (SELECT count(*) AS total,
-                                        CASE WHEN COUNT(*) < {num_samples} THEN 1
-                                        ELSE ROUND((COUNT(*)/{num_samples}),0)
-                                        END AS how_many
-                                   FROM {table}
-                                  WHERE {field} IS NOT NULL) count_table,
-                                {table} service_table
-                            WHERE (MOD(row_number,how_many)=0 OR row_number = 1 OR row_number = total)
-                              AND service_table.{primary_key}=all_data.{primary_key}
-                            ORDER BY service_table.{field}""".format(
-            field=field,
-            primary_key=self.object_id_field,
-            table=self.table,
-            num_samples=1000
-        )
+        sql_statement = """
+            SELECT service_table.{field}
+            FROM {table} service_table, (
+                SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {primary_key}
+                FROM {table}
+                WHERE {field} IS NOT NULL
+                ORDER BY {field}
+            ) all_data, (
+                SELECT COUNT(0) AS total,
+                    CASE
+                    WHEN COUNT(0) < {num_samples} THEN 1
+                    ELSE ROUND((COUNT(0) / {num_samples}), 0)
+                    END AS how_many
+                FROM {table}
+                WHERE {field} IS NOT NULL
+            ) count_table
+            WHERE service_table.{primary_key} = all_data.{primary_key} AND (
+                MOD(row_number,how_many) = 0 OR
+                row_number = 1 OR
+                row_number = total
+            )
+            ORDER BY service_table.{field}
+        """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
 
         with get_cursor() as c:
             c.execute(sql_statement)
@@ -599,11 +601,11 @@ class FeatureServiceLayer(models.Model):
 
         for key in columns_in_request:
             if key not in colnames_in_table:
-                raise Exception('attributes do not match')
+                raise AttributeError('attributes do not match')
             columns_not_present.remove(key)
 
         if len(columns_not_present):
-            raise Exception('Missing attributes {0}'.format(','.join(columns_not_present)))
+            raise AttributeError('Missing attributes {0}'.format(','.join(columns_not_present)))
 
         insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
             dataset_table_name=self.table,
@@ -647,7 +649,7 @@ class FeatureServiceLayer(models.Model):
             colnames_in_table = [desc[0].lower() for desc in c.description]
 
         if PRIMARY_KEY_NAME not in feature['attributes']:
-            raise Exception('Cannot update feature without a primary key')
+            raise AttributeError('Cannot update feature without a primary key')
 
         primary_key = feature['attributes'][PRIMARY_KEY_NAME]
 
@@ -658,7 +660,7 @@ class FeatureServiceLayer(models.Model):
             if key == PRIMARY_KEY_NAME:
                 continue
             if key not in colnames_in_table:
-                raise Exception('attributes do not match')
+                raise AttributeError('attributes do not match')
             if key != POINT_FIELD_NAME:
                 argument_updates.append('{0} = %s'.format(key))
                 if key in date_fields and feature['attributes'][key]:
