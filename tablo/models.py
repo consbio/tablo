@@ -232,34 +232,42 @@ class FeatureServiceLayer(models.Model):
         return None
 
     def perform_query(self, limit=0, offset=0, **kwargs):
-        count_only = kwargs.pop('count_only', False)
-        ids_only = kwargs.pop('ids_only', False)
-        return_fields = kwargs.get('return_fields', '*')
-        return_geometry = kwargs.get('return_geometry', True)
+        limit, offset = max(limit, 0), max(offset, 0)
+
+        count_only = bool(kwargs.pop('count_only', False))
+        ids_only = bool(kwargs.pop('ids_only', False))
+        return_fields = [f.strip() for f in list(kwargs.get('return_fields') or '*')]
+        return_geometry = bool(kwargs.get('return_geometry', True))
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
 
         additional_where_clause = kwargs.get('additional_where_clause')
         additional_where_clause = additional_where_clause.replace('"', '') if additional_where_clause else None
 
-        order_by_fields = kwargs.get('order_by_fields', [])
+        order_by_fields = [f.strip() for f in kwargs.get('order_by_fields') or '']
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
 
         if not ids_only:
-            self._validate_fields(return_fields)
-            self._validate_fields(order_by_fields)
+            include_related = bool(kwargs.get('object_ids'))
+
+            self._validate_fields(return_fields, include_related)
+            self._validate_fields(order_by_fields, include_related)
 
         self._validate_where_clause(additional_where_clause)
 
-        # Build SELECT, JOIN, WHERE and ORDER BY from inputs, and execute
+        # Build SELECT, JOIN, WHERE and ORDER BY from inputs
 
         if count_only:
+            return_fields = order_by_fields = []
             select_fields = 'COUNT(0)'
         elif ids_only:
             return_fields = order_by_fields = [self.object_id_field]
             select_fields = 'DISTINCT {0}'.format(self._alias_fields(return_fields))
         else:
+            if self.object_id_field not in return_fields:
+                return_fields.insert(0, self.object_id_field)
+
             select_fields = self._expand_fields(return_fields)
             if return_geometry:
                 select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
@@ -270,21 +278,29 @@ class FeatureServiceLayer(models.Model):
             fields=order_by_fields, related_tables=(None if ids_only else related_tables)
         )
 
-        query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit_offset}'
+        query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit} {offset}'
         query_clause = query_clause.format(
             fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by,
-            limit_offset='LIMIT {limit} OFFSET {offset}'.format(limit=limit, offset=offset)
+            limit='' if limit == 0 else 'LIMIT {limit}'.format(limit=limit + 1),
+            offset='' if offset == 0 else 'OFFSET {offset}'.format(offset=offset)
         )
+
+        # Execute query with optional limit and offset, and prepare return data
 
         with get_cursor() as c:
             c.execute(query_clause, query_params)
-            return dictfetchall(c)
+            queried_data = dictfetchall(c)
+
+        limited_data = 0 < limit < len(queried_data)
+        queried_data = queried_data[:-1] if limited_data else queried_data
+
+        return {'data': queried_data, 'exceeded_limit': limited_data}
 
     def _alias_fields(self, fields):
         """ Delimit and alias fields for query in double quotes, but ignore '*' """
 
         if not fields:
-            return '"source".*'
+            return self._expand_fields('*', True)
         elif isinstance(fields, str):
             fields = fields.split(',')
 
@@ -293,12 +309,12 @@ class FeatureServiceLayer(models.Model):
 
         return quoted_fields.replace('"*"', '*')
 
-    def _expand_fields(self, fields, alias_only=False):
+    def _expand_fields(self, fields, aliased_only=False):
         """ Expand '*' in fields to those that will be queried, and optionally alias them to avoid clashes """
 
         if isinstance(fields, str):
             fields = fields.split(',')
-        if not any('.' in f for f in fields):
+        if not any(f == '*' or '.' in f for f in fields):
             return self._alias_fields(fields)
 
         fields_to_expand = [self.object_id_field]
@@ -313,11 +329,11 @@ class FeatureServiceLayer(models.Model):
             else:
                 fields_to_expand.append(field)
 
-        field_format = '"{1}"' if alias_only else '{0} AS "{1}"'
+        field_format = '{0}' if aliased_only else '{0} AS "{1}"'
 
         return ', '.join(field_format.format(self._alias_fields(f), f) for f in OrderedSet(fields_to_expand))
 
-    def _build_join_clause(self, fields, where, **kwargs):
+    def _build_join_clause(self, fields, where):
         if not fields and where is None:
             return '', []
         elif where is None:
@@ -419,7 +435,7 @@ class FeatureServiceLayer(models.Model):
             for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
                 insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
 
-        return order_by_clause.format(fields=self._expand_fields(order_by_fields, alias_only=True))
+        return order_by_clause.format(fields=self._expand_fields(order_by_fields, aliased_only=True))
 
     def _parse_where_clause(self, where):
         if where is None:
@@ -438,19 +454,22 @@ class FeatureServiceLayer(models.Model):
 
         self._validate_fields(parsed[0])
 
-    def _validate_fields(self, fields):
+    def _validate_fields(self, fields, include_related=True):
         if isinstance(fields, str):
             fields = fields.split(',')
 
-        query_fields = {field.replace('"', '') for field in fields if '*' not in field}
+        query_fields = {field.replace('"', '') for field in fields if field != '*'}
         if not query_fields:
-            return True
+            return
 
-        valid_fields = set(r for r in self.related_fields).union(f['name'] for f in self.fields)
+        valid_fields = set(f['name'] for f in self.fields)
+        if include_related:
+            valid_fields = valid_fields.union('{0}.*'.format(r.related_title) for r in self.relations)
+            valid_fields = valid_fields.union(f for f in self.related_fields)
+
         invalid_fields = query_fields.difference(valid_fields)
-
         if invalid_fields:
-            raise InvalidFieldsError('Invalid fields: {0}', ', '.join(invalid_fields))
+            raise InvalidFieldsError('Invalid fields: {0}'.format(', '.join(invalid_fields)))
 
     def get_distinct_geometries_across_time(self, *kwargs):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'

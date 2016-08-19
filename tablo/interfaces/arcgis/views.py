@@ -196,8 +196,7 @@ class TimeQueryView(FeatureLayerView):
 
         features = convert_wkt_to_esri_feature(time_query_result, self.feature_service_layer)
         response = {
-            'count': len(features),           # Root level (source) features
-            'total': len(time_query_result),  # Total number of records queried
+            'count': len(features),
             'fields': [{'name': 'count', 'alias': 'count', 'type': 'esriFieldTypeInteger'}],
             'geometryType': 'esriGeometryPoint',
             'features': features
@@ -213,13 +212,15 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
-    query_limit_default = 50000
+    query_limit_default = 1000
 
     def handle_request(self, request, **kwargs):
-
         search_params = {}
-        limit = int(kwargs.get('limit', self.query_limit_default))
-        offset = int(kwargs.get('offset', 0))
+
+        # Capture query bounding parameters (limit/offset does not apply when filtering by object ids)
+        object_ids = kwargs['objectIds'].split(',') if kwargs.get('objectIds') else []
+        limit = 0 if object_ids else int(kwargs.get('limit') or self.query_limit_default)
+        offset = 0 if object_ids else int(kwargs.get('offset') or 0)
 
         # Capture format type: default anything but csv or json to json
         valid_formats = {'csv', 'json'}
@@ -240,17 +241,19 @@ class QueryView(FeatureLayerView):
 
         search_params['out_sr'] = kwargs.get('outSR')
 
-        if 'objectIds' in kwargs:
-            search_params['object_ids'] = (kwargs['objectIds'] or '').split(',')
+        if object_ids:
+            search_params['object_ids'] = object_ids
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
         if not return_ids_only and kwargs.get('outFields'):
-            search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
+            return_fields = kwargs['outFields'].split(',') if kwargs.get('outFields') else []
+            search_params['return_fields'] = return_fields
 
         if not return_ids_only and kwargs.get('orderByFields'):
-            search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
+            order_by_fields = kwargs['orderByFields'].split(',') if kwargs.get('orderByFields') else []
+            search_params['order_by_fields'] = order_by_fields
 
         if return_ids_only:
             search_params['ids_only'] = True
@@ -262,16 +265,15 @@ class QueryView(FeatureLayerView):
 
         try:
             # Query with limit plus one to determine if the limit excluded any features
-            query_response = self.feature_service_layer.perform_query(int(limit) + 1, offset, **search_params)
+            query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
         except InvalidFieldsError as ex:
             return HttpResponseBadRequest(json.dumps({'error': ex.message}))
         except DatabaseError:
             # Any generic database error, or failed validation of SQL injection
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
-        # Process limited query before calculating totals and counts
-        exceeded_limit = len(query_response) > int(limit)
-        query_response = query_response[:-1] if exceeded_limit else query_response
+        exceeded_limit = query_response.pop('exceeded_limit')
+        query_response = query_response.pop('data')
 
         if return_count_only:
             data = query_response[0]
@@ -296,7 +298,6 @@ class QueryView(FeatureLayerView):
         else:
             data = {
                 'count': len(query_response),
-                'total': len(query_response),
                 'exceededTransferLimit': exceeded_limit
             }
             if return_ids_only:
@@ -304,16 +305,16 @@ class QueryView(FeatureLayerView):
                 data['objectIdFieldName'] = object_id_field
                 data['objectIds'] = [feature[object_id_field] for feature in query_response]
             else:
+                queried = set(query_response[0].keys())
                 features = convert_wkt_to_esri_feature(query_response, self.feature_service_layer)
                 data.update({
-                    'count': len(features),        # Root level (source) features
-                    'total': len(query_response),  # Total number of records queried
+                    'count': len(features),
                     'fields': self.feature_service_layer.fields,
                     'geometryType': 'esriGeometryPoint',
                     'features': features
                 })
 
-                if data['total'] > data['count']:
+                if object_ids and any('.' in field for field in queried):
                     data['relatedFields'] = {
                         r.related_title: r.fields for r in self.feature_service_layer.relations
                     }
@@ -436,10 +437,8 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 to_be_related.setdefault(related_title, {})[attr_name] = to_add
                 to_be_related[related_title].setdefault(pk, item[fk])
 
-        # Track source items by item hash, and append related information under unique source items
-
         if not to_be_related:
-            # Prevent duplicate base items when related items have been queried
+            # Prevent duplicate source items when related items were in the join but not selected
 
             item.pop('related', None)
             item_hash = item[for_layer.object_id_field]
@@ -447,7 +446,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 already_added[item_hash] = feature
                 features.append(feature)
         else:
-            # Append distinct base items with related items nested under each
+            # Append unique source items by item hash, and append related information under each
 
             for table, info in joined_tables.items():
                 fk, pk = info['source'], info['target']
