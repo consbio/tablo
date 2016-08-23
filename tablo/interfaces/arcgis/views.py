@@ -305,7 +305,7 @@ class QueryView(FeatureLayerView):
                 data['objectIdFieldName'] = object_id_field
                 data['objectIds'] = [feature[object_id_field] for feature in query_response]
             else:
-                queried = set(query_response[0].keys())
+                queried = set(query_response[0].keys()) if query_response else set()
                 features = convert_wkt_to_esri_feature(query_response, self.feature_service_layer)
                 data.update({
                     'count': len(features),
