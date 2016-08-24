@@ -13,7 +13,7 @@ from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
-from tablo.exceptions import InvalidFieldsError, SQLInjectionError
+from tablo.exceptions import InvalidFieldsError, RelatedFieldsError, InvalidSQLError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
 
@@ -453,7 +453,7 @@ class FeatureServiceLayer(models.Model):
         if parsed is None:
             return
         elif parsed[1]:
-            raise SQLInjectionError('Invalid where clause')
+            raise InvalidSQLError('Invalid where clause')
 
         self._validate_fields(parsed[0])
 
@@ -461,18 +461,34 @@ class FeatureServiceLayer(models.Model):
         if isinstance(fields, str):
             fields = fields.split(',')
 
-        query_fields = {field.replace('"', '') for field in fields if field != '*'}
+        query_fields = {field.replace('"', '') for field in fields}
         if not query_fields:
             return
 
-        valid_fields = set(f['name'] for f in self.fields)
-        if include_related:
-            valid_fields = valid_fields.union('{0}.*'.format(r.related_title) for r in self.relations)
-            valid_fields = valid_fields.union(f for f in self.related_fields)
+        all_related = ('{0}.*'.format(r.related_title) for r in self.relations)
+        valid_fields = {
+            'source': set(f['name'] for f in self.fields).union('*'),
+            'target': set(f for f in self.related_fields).union(all_related)
+        }
 
-        invalid_fields = query_fields.difference(valid_fields)
+        invalid_fields = query_fields.difference(valid_fields['source'])
         if invalid_fields:
-            raise InvalidFieldsError('Invalid fields: {0}'.format(', '.join(invalid_fields)))
+
+            if include_related:
+                invalid_fields = invalid_fields.difference(valid_fields['target'])
+            else:
+                related_fields = invalid_fields.intersection(valid_fields['target'])
+                if related_fields:
+                    raise RelatedFieldsError(
+                        'Related fields not allowed: {0}'.format(', '.join(related_fields)),
+                        fields=related_fields
+                    )
+
+            if invalid_fields:
+                raise InvalidFieldsError(
+                    message='Invalid fields: {0}'.format(', '.join(invalid_fields)),
+                    fields=invalid_fields
+                )
 
     def get_distinct_geometries_across_time(self, *kwargs):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'

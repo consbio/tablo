@@ -1,9 +1,13 @@
+import csv
+import io
 import json
 import logging
 import time
 import re
 
+
 from django.db.utils import DatabaseError
+from django.core.exceptions import ValidationError
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
@@ -12,9 +16,9 @@ from django.views.generic import DetailView, View
 
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
-from tablo.exceptions import InvalidFieldsError
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
+QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +38,7 @@ class FeatureServiceDetailView(DetailView):
             'supportsAdvancedQueries': True,
             'hasVersionedData': False,
             'supportsDisconnectedEditing': False,
-            'maxRecordCount': 10000,
+            'maxRecordCount': QUERY_LIMIT,
             'description': self.object.description,
             'units': self.object.units,
             'fullExtent': json.loads(self.object.full_extent),
@@ -83,7 +87,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'type': 'Feature Layer',
             'capabilities': 'Query',
             'currentVersion': 10.2,
-            'maxRecordCount': 10000,
+            'maxRecordCount': QUERY_LIMIT,
             'minScale': 0,
             'maxScale': 0,
             'name': self.object.name,
@@ -212,15 +216,10 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
-    query_limit_default = 1000
+    query_limit_default = QUERY_LIMIT
 
     def handle_request(self, request, **kwargs):
         search_params = {}
-
-        # Capture query bounding parameters (limit/offset does not apply when filtering by object ids)
-        object_ids = kwargs['objectIds'].split(',') if kwargs.get('objectIds') else []
-        limit = 0 if object_ids else int(kwargs.get('limit') or self.query_limit_default)
-        offset = 0 if object_ids else int(kwargs.get('offset') or 0)
 
         # Capture format type: default anything but csv or json to json
         valid_formats = {'csv', 'json'}
@@ -230,6 +229,13 @@ class QueryView(FeatureLayerView):
         # When requesting IDs, ArcGIS sends returnIdsOnly AND returnCountOnly, but expects the IDs response
         return_ids_only = return_format == 'json' and kwargs.get('returnIdsOnly', 'false').lower() == 'true'
         return_count_only = not return_ids_only and kwargs.get('returnCountOnly', 'false').lower() == 'true'
+
+        # Capture query bounding parameters (limit/offset does not apply when returning or filtering by object ids)
+        object_ids = kwargs['objectIds'].split(',') if kwargs.get('objectIds') else []
+        skip_limit = return_ids_only or bool(object_ids)
+
+        limit = 0 if skip_limit else int(kwargs.get('limit') or self.query_limit_default)
+        offset = 0 if skip_limit else int(kwargs.get('offset') or 0)
 
         if 'where' in kwargs and kwargs['where'] != '':
             search_params['additional_where_clause'] = kwargs.get('where')
@@ -266,7 +272,7 @@ class QueryView(FeatureLayerView):
         try:
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
-        except InvalidFieldsError as ex:
+        except ValidationError as ex:
             return HttpResponseBadRequest(json.dumps({'error': ex.message}))
         except DatabaseError:
             # Any generic database error, or failed validation of SQL injection
@@ -278,23 +284,28 @@ class QueryView(FeatureLayerView):
         if return_count_only:
             data = query_response[0]
         elif return_format == 'csv':
-            data = []
+            data = io.StringIO()
+
             if query_response:
-                header = list(query_response[0].keys())
-                has_geometry = 'st_astext' in header
+                headers = list(query_response[0].keys())
+                has_geometry = 'st_astext' in headers
 
                 if has_geometry:
-                    header.remove('st_astext')
-                    header.append('geometry_x_location')
-                    header.append('geometry_y_location')
+                    headers.remove('st_astext')
+                    headers.append('geometry_x_location')
+                    headers.append('geometry_y_location')
 
-                data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
+                writer = csv.DictWriter(data, fieldnames=headers)
+                if offset == 0:
+                    writer.writeheader()
+
                 for item in query_response:
                     if has_geometry:
                         x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
                         item['geometry_x_location'] = x_loc
                         item['geometry_y_location'] = y_loc
-                    data.append([str(item[field]).replace('"', '""').strip('"').join('""') for field in header])
+                        item.pop('st_astext')
+                    writer.writerow(item)
         else:
             data = {
                 'count': len(query_response),
@@ -320,7 +331,7 @@ class QueryView(FeatureLayerView):
                     }
 
         if return_format == 'csv':
-            content = '\n'.join(','.join(col if isinstance(col, str) else str(col) for col in row) for row in data)
+            content = data.getvalue()
             content_type = 'text/csv'
         else:
             content = json.dumps(data, default=json_date_serializer)
