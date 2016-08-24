@@ -13,7 +13,7 @@ from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
-from tablo.exceptions import InvalidFieldsError, RelatedFieldsError, InvalidSQLError
+from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
 
@@ -557,7 +557,7 @@ class FeatureServiceLayer(models.Model):
                 FROM {table} serviceTable
                 WHERE serviceTable.{field} IS NOT NULL
             ) count_table
-            WHERE MOD(row_number,how_many) = 0
+            WHERE MOD(row_number, how_many) = 0
             ORDER BY all_data.{field}
         """.format(field=field, table=self.table, break_count=break_count)
 
@@ -600,9 +600,8 @@ class FeatureServiceLayer(models.Model):
                 WHERE {field} IS NOT NULL
             ) count_table
             WHERE service_table.{primary_key} = all_data.{primary_key} AND (
-                MOD(row_number,how_many) = 0 OR
-                row_number = 1 OR
-                row_number = total
+                MOD(row_number, how_many) = 0 OR
+                row_number IN (1, total)
             )
             ORDER BY service_table.{field}
         """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
