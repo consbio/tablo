@@ -215,7 +215,7 @@ class FeatureServiceLayer(models.Model):
 
             self._related_fields = OrderedDict()
             for field in (f for r in self.relations for f in r.fields):
-                field_key = field['alias']  # Will be related_title.field
+                field_key = field['aliased']  # Will be related_title.field
                 self.related_fields[field_key] = field
 
         return self._related_fields
@@ -297,7 +297,7 @@ class FeatureServiceLayer(models.Model):
         return {'data': queried_data, 'exceeded_limit': limited_data}
 
     def _alias_fields(self, fields):
-        """ Delimit and alias fields for query in double quotes, but ignore '*' """
+        """ Prepend table alias to fields, delimiting them in double quotes, but ignore '*' """
 
         if not fields:
             return self._expand_fields('*', True)
@@ -764,7 +764,7 @@ class FeatureServiceLayerRelations(models.Model):
 
             fields = get_fields(self.table)
             for field in fields:
-                field['alias'] = '{0}.{1}'.format(self.related_title, field['name'])
+                field['aliased'] = '{0}.{1}'.format(self.related_title, field['name'])
             self._fields = fields
 
         return self._fields

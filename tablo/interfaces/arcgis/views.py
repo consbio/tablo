@@ -406,7 +406,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if f['alias'] in query_fields}
+            'fields': {f['name'] for f in r.fields if f['aliased'] in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}
