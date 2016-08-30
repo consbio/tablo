@@ -52,7 +52,11 @@ def convert_header_to_column_name(header):
     converted_header = converted_header.replace(' ', '_')
     converted_header = converted_header.replace('-', '_')
     converted_header = re.sub('\W', '', converted_header)
-    converted_header.strip('_')
+    converted_header = converted_header.strip('_')
+
+    # Remove non-ascii characters
+    converted_header = re.sub('[^\x00-\x7f]', '', converted_header)
+
     if converted_header[0].isdigit():
         converted_header = 'f_' + converted_header
     if converted_header in POSTGRES_KEYWORDS:
