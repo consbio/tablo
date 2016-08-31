@@ -547,16 +547,18 @@ class FeatureServiceLayer(models.Model):
 
         sql_statement = """
             SELECT all_data.{field}
-            FROM (
-                SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {field}
-                FROM {table}
-                WHERE {field} IS NOT NULL
-                ORDER BY {field}
-            ) all_data, (
-                SELECT ROUND((COUNT(0) / {break_count}), 0) AS how_many
-                FROM {table} serviceTable
-                WHERE serviceTable.{field} IS NOT NULL
-            ) count_table
+            FROM
+                (
+                    SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {field}
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                    ORDER BY {field}
+                ) all_data,
+                (
+                    SELECT ROUND((COUNT(0) / {break_count}), 0) AS how_many
+                    FROM {table} serviceTable
+                    WHERE serviceTable.{field} IS NOT NULL
+                ) count_table
             WHERE MOD(row_number, how_many) = 0
             ORDER BY all_data.{field}
         """.format(field=field, table=self.table, break_count=break_count)
