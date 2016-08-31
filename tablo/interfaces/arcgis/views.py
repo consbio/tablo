@@ -272,9 +272,9 @@ class QueryView(FeatureLayerView):
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
         except ValidationError as ex:
+            # Failed validation of provided fields and incoming SQL are handled here
             return HttpResponseBadRequest(json.dumps({'error': ex.message}))
         except DatabaseError:
-            # Any generic database error, or failed validation of SQL injection
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
         exceeded_limit = query_response.pop('exceeded_limit')
