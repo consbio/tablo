@@ -585,24 +585,28 @@ class FeatureServiceLayer(models.Model):
 
         sql_statement = """
             SELECT service_table.{field}
-            FROM {table} service_table, (
-                SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {primary_key}
-                FROM {table}
-                WHERE {field} IS NOT NULL
-                ORDER BY {field}
-            ) all_data, (
-                SELECT COUNT(0) AS total,
-                    CASE
-                    WHEN COUNT(0) < {num_samples} THEN 1
-                    ELSE ROUND((COUNT(0) / {num_samples}), 0)
-                    END AS how_many
-                FROM {table}
-                WHERE {field} IS NOT NULL
-            ) count_table
-            WHERE service_table.{primary_key} = all_data.{primary_key} AND (
-                MOD(row_number, how_many) = 0 OR
-                row_number IN (1, total)
-            )
+            FROM {table} service_table,
+                (
+                    SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {primary_key}
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                    ORDER BY {field}
+                ) all_data,
+                (
+                    SELECT
+                        COUNT(0) AS total,
+                        CASE
+                            WHEN COUNT(0) < {num_samples} THEN 1
+                            ELSE ROUND((COUNT(0) / {num_samples}), 0)
+                        END AS how_many
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                ) count_table
+            WHERE service_table.{primary_key} = all_data.{primary_key} AND
+                (
+                    MOD(row_number, how_many) = 0 OR
+                    row_number IN (1, total)
+                )
             ORDER BY service_table.{field}
         """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
 
