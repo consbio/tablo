@@ -1,9 +1,12 @@
+import csv
+import io
 import json
 import logging
 import time
 import re
 
 from django.db.utils import DatabaseError
+from django.core.exceptions import ValidationError
 from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
@@ -14,6 +17,7 @@ from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
 POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
+QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,7 @@ class FeatureServiceDetailView(DetailView):
             'supportsAdvancedQueries': True,
             'hasVersionedData': False,
             'supportsDisconnectedEditing': False,
-            'maxRecordCount': 10000,
+            'maxRecordCount': QUERY_LIMIT,
             'description': self.object.description,
             'units': self.object.units,
             'fullExtent': json.loads(self.object.full_extent),
@@ -82,7 +86,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'type': 'Feature Layer',
             'capabilities': 'Query',
             'currentVersion': 10.2,
-            'maxRecordCount': 10000,
+            'maxRecordCount': QUERY_LIMIT,
             'minScale': 0,
             'maxScale': 0,
             'name': self.object.name,
@@ -195,8 +199,7 @@ class TimeQueryView(FeatureLayerView):
 
         features = convert_wkt_to_esri_feature(time_query_result, self.feature_service_layer)
         response = {
-            'count': len(features),           # Root level (source) features
-            'total': len(time_query_result),  # Total number of records queried
+            'count': len(features),
             'fields': [{'name': 'count', 'alias': 'count', 'type': 'esriFieldTypeInteger'}],
             'geometryType': 'esriGeometryPoint',
             'features': features
@@ -212,13 +215,10 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
-    query_limit_default = 50000
+    query_limit_default = QUERY_LIMIT
 
     def handle_request(self, request, **kwargs):
-
         search_params = {}
-        limit = int(kwargs.get('limit', self.query_limit_default))
-        offset = int(kwargs.get('offset', 0))
 
         # Capture format type: default anything but csv or json to json
         valid_formats = {'csv', 'json'}
@@ -228,6 +228,13 @@ class QueryView(FeatureLayerView):
         # When requesting IDs, ArcGIS sends returnIdsOnly AND returnCountOnly, but expects the IDs response
         return_ids_only = return_format == 'json' and kwargs.get('returnIdsOnly', 'false').lower() == 'true'
         return_count_only = not return_ids_only and kwargs.get('returnCountOnly', 'false').lower() == 'true'
+
+        # Capture query bounding parameters (limit/offset does not apply when returning or filtering by object ids)
+        object_ids = kwargs['objectIds'].split(',') if kwargs.get('objectIds') else []
+        skip_limit = return_ids_only or bool(object_ids)
+
+        limit = 0 if skip_limit else int(kwargs.get('limit') or self.query_limit_default)
+        offset = 0 if skip_limit else int(kwargs.get('offset') or 0)
 
         if 'where' in kwargs and kwargs['where'] != '':
             search_params['additional_where_clause'] = kwargs.get('where')
@@ -239,17 +246,19 @@ class QueryView(FeatureLayerView):
 
         search_params['out_sr'] = kwargs.get('outSR')
 
-        if 'objectIds' in kwargs:
-            search_params['object_ids'] = (kwargs['objectIds'] or '').split(',')
+        if object_ids:
+            search_params['object_ids'] = object_ids
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
             search_params['extent'] = Extent(json.loads(kwargs['geometry']))
 
         if not return_ids_only and kwargs.get('outFields'):
-            search_params['return_fields'] = (kwargs['outFields'] or '').split(',')
+            return_fields = kwargs['outFields'].split(',') if kwargs.get('outFields') else []
+            search_params['return_fields'] = return_fields
 
         if not return_ids_only and kwargs.get('orderByFields'):
-            search_params['order_by_fields'] = (kwargs['orderByFields'] or '').split(',')
+            order_by_fields = kwargs['orderByFields'].split(',') if kwargs.get('orderByFields') else []
+            search_params['order_by_fields'] = order_by_fields
 
         if return_ids_only:
             search_params['ids_only'] = True
@@ -261,38 +270,44 @@ class QueryView(FeatureLayerView):
 
         try:
             # Query with limit plus one to determine if the limit excluded any features
-            query_response = self.feature_service_layer.perform_query(int(limit) + 1, offset, **search_params)
-        except (DatabaseError, ValueError):
+            query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
+        except ValidationError as ex:
+            # Failed validation of provided fields and incoming SQL are handled here
+            return HttpResponseBadRequest(json.dumps({'error': ex.message}))
+        except DatabaseError:
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
-        # Process limited query before calculating totals and counts
-        exceeded_limit = len(query_response) > int(limit)
-        query_response = query_response[:-1] if exceeded_limit else query_response
+        exceeded_limit = query_response.pop('exceeded_limit')
+        query_response = query_response.pop('data')
 
         if return_count_only:
             data = query_response[0]
         elif return_format == 'csv':
-            data = []
+            data = io.StringIO()
+
             if query_response:
-                header = list(query_response[0].keys())
-                has_geometry = 'st_astext' in header
+                headers = list(query_response[0].keys())
+                has_geometry = 'st_astext' in headers
 
                 if has_geometry:
-                    header.remove('st_astext')
-                    header.append('geometry_x_location')
-                    header.append('geometry_y_location')
+                    headers.remove('st_astext')
+                    headers.append('geometry_x_location')
+                    headers.append('geometry_y_location')
 
-                data = [[h.strip('"').join('""') for h in header]] if offset == 0 else []
+                writer = csv.DictWriter(data, fieldnames=headers)
+                if offset == 0:
+                    writer.writeheader()
+
                 for item in query_response:
                     if has_geometry:
                         x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
                         item['geometry_x_location'] = x_loc
                         item['geometry_y_location'] = y_loc
-                    data.append([str(item[field]).replace('"', '""').strip('"').join('""') for field in header])
+                        item.pop('st_astext')
+                    writer.writerow(item)
         else:
             data = {
                 'count': len(query_response),
-                'total': len(query_response),
                 'exceededTransferLimit': exceeded_limit
             }
             if return_ids_only:
@@ -300,22 +315,22 @@ class QueryView(FeatureLayerView):
                 data['objectIdFieldName'] = object_id_field
                 data['objectIds'] = [feature[object_id_field] for feature in query_response]
             else:
+                queried = set(query_response[0].keys()) if query_response else set()
                 features = convert_wkt_to_esri_feature(query_response, self.feature_service_layer)
                 data.update({
-                    'count': len(features),        # Root level (source) features
-                    'total': len(query_response),  # Total number of records queried
+                    'count': len(features),
                     'fields': self.feature_service_layer.fields,
                     'geometryType': 'esriGeometryPoint',
                     'features': features
                 })
 
-                if data['total'] > data['count']:
+                if object_ids and any('.' in field for field in queried):
                     data['relatedFields'] = {
                         r.related_title: r.fields for r in self.feature_service_layer.relations
                     }
 
         if return_format == 'csv':
-            content = '\n'.join(','.join(col if isinstance(col, str) else str(col) for col in row) for row in data)
+            content = data.getvalue()
             content_type = 'text/csv'
         else:
             content = json.dumps(data, default=json_date_serializer)
@@ -391,7 +406,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if f['alias'] in query_fields}
+            'fields': {f['name'] for f in r.fields if f['aliased'] in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}
@@ -432,10 +447,8 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 to_be_related.setdefault(related_title, {})[attr_name] = to_add
                 to_be_related[related_title].setdefault(pk, item[fk])
 
-        # Track source items by item hash, and append related information under unique source items
-
         if not to_be_related:
-            # Prevent duplicate base items when related items have been queried
+            # Prevent duplicate source items when related items were in the join but not selected
 
             item.pop('related', None)
             item_hash = item[for_layer.object_id_field]
@@ -443,7 +456,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 already_added[item_hash] = feature
                 features.append(feature)
         else:
-            # Append distinct base items with related items nested under each
+            # Append unique source items by item hash, and append related information under each
 
             for table, info in joined_tables.items():
                 fk, pk = info['source'], info['target']
