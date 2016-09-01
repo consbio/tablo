@@ -112,7 +112,7 @@ class FeatureServiceResource(ModelResource):
             return Http404()
 
         columns = json.loads(request.POST.get('columns'))
-        row_columns = [Column(column=column['name'], type=column['type']) for column in columns]
+        row_columns = [Column(column=col['name'], type=col['type'], required=col['required']) for col in columns]
 
         dataset_list = json.loads(request.POST.get('dataset_list'))
         table_name = create_aggregate_database_table(row_columns, service.dataset_id)

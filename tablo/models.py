@@ -655,8 +655,9 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
 
 def create_aggregate_database_table(row, dataset_id):
     row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
-    table_name = create_database_table(row, dataset_id)
-    row.pop() # remove the appended column
+    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
+    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
+    row.pop()  # remove the appended column
     return table_name
 
 
@@ -675,11 +676,11 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
         current_columns = [column for column in columns if column.column.lower() in colnames_in_table]
 
         insert_command = (
-            'INSERT INTO {table_name} ({definition_fields}, {source_dataset}, {spatial_field}) '
-            'SELECT {definition_fields}, {dataset_id}, {spatial_field} FROM {dataset_table_name}'
+            'INSERT INTO {table_name} ({definition_fields} {source_dataset}, {spatial_field}) '
+            'SELECT {definition_fields} {dataset_id}, {spatial_field} FROM {dataset_table_name}'
         ).format(
             table_name=aggregate_table_name,
-            definition_fields=','.join([column.column for column in current_columns]),
+            definition_fields=','.join([column.column for column in current_columns]) + ',' if current_columns else '',
             source_dataset=SOURCE_DATASET_FIELD_NAME,
             dataset_id="'{0}'".format(dataset_id),
             dataset_table_name=TABLE_NAME_PREFIX + dataset_id,
