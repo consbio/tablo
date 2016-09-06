@@ -382,7 +382,7 @@ class FeatureServiceLayer(models.Model):
         query_params = []
 
         if self.start_time_field:
-            layer_time_field = '"source"."{time_field}"'.format(time_field=self.start_time_field)
+            layer_time_field = '"source"."{time_field}"'.format(time_field=self.start_time_field.lower())
 
             if start_time:
                 if start_time == end_time:
