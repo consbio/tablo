@@ -16,11 +16,11 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo import csv_utils
-from tablo.csv_utils import determine_x_and_y_fields
-from tablo.models import FeatureService, FeatureServiceLayer, TemporaryFile, create_database_table, populate_data
-from tablo.models import add_point_column, populate_point_data, copy_data_table_for_import
-from tablo.models import create_aggregate_database_table, populate_aggregate_table, add_or_update_database_fields, Column
+from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows
+from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
+from tablo.models import add_point_column, add_or_update_database_fields
+from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
+from tablo.models import populate_aggregate_table, populate_data, populate_point_data
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,9 @@ class FeatureServiceResource(ModelResource):
 
         add_response_obj = []
         feature_service_layer = service.featureservicelayer_set.first()
-        original_time_extent = feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
+        original_time_extent = (
+            feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
+        )
         for feature in adds:
             try:
                 object_id = feature_service_layer.add_feature(feature)
@@ -201,16 +203,38 @@ class FeatureServiceResource(ModelResource):
 
         if original_time_extent:
             new_time_extent = feature_service_layer.get_raw_time_extent()
-            if (new_time_extent[0] != original_time_extent[0] or
-                new_time_extent[1] != original_time_extent[1]):
+            has_new_time_extent = (
+                new_time_extent[0] != original_time_extent[0] or
+                new_time_extent[1] != original_time_extent[1]
+            )
+            if has_new_time_extent:
                 response_obj['new_time_extent'] = json.dumps(new_time_extent)
 
         return self.create_response(request, response_obj)
 
 
+class FeatureServiceLayerRelationsResource(ModelResource):
+
+    layer_id = fields.IntegerField(attribute='layer_id', readonly=True)
+
+    class Meta:
+        object_class = FeatureServiceLayerRelations
+        resource_name = 'featureservicelayerrelations'
+        list_allowed_methods = ['get']
+        detail_allowed_methods = ['get']
+        serializer = Serializer(formats=['json', 'jsonp'])
+        queryset = FeatureServiceLayerRelations.objects.select_related('layer').all()
+        authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
+        authorization = DjangoAuthorization()
+
+
 class FeatureServiceLayerResource(ModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
+    relations = fields.ToManyField(
+        FeatureServiceLayerRelationsResource,
+        attribute='featureservicelayerrelations_set', full=True, readonly=True, null=True
+    )
 
     class Meta:
         object_class = FeatureServiceLayer
@@ -277,7 +301,7 @@ class TemporaryFileResource(ModelResource):
         else:
             raise ImmediateHttpResponse(HttpBadRequest('Unsupported file format.'))
 
-        row_set = csv_utils.prepare_csv_rows(obj.file)
+        row_set = prepare_csv_rows(obj.file)
 
         sample_row = next(row_set.sample)
         bundle.data['fieldNames'] = [cell.column for cell in sample_row]
@@ -307,9 +331,9 @@ class TemporaryFileResource(ModelResource):
             additional_fields = json.loads(request.POST.get('fields'))
 
             # Use separate iterator of table rows to not exaust the main one
-            optional_fields = determine_optional_fields(csv_utils.prepare_csv_rows(obj.file))
+            optional_fields = determine_optional_fields(prepare_csv_rows(obj.file))
 
-            row_set = csv_utils.prepare_csv_rows(obj.file)
+            row_set = prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, optional_fields=optional_fields)
             populate_data(table_name, row_set)
@@ -322,7 +346,7 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError as e:
+        except InternalError:
             logger.exception()
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
@@ -341,7 +365,7 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            row_set = csv_utils.prepare_csv_rows(obj.file)
+            row_set = prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, append=True)
 
@@ -352,7 +376,7 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError as e:
+        except InternalError:
             logger.exception()
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 

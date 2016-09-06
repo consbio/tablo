@@ -4,23 +4,28 @@ import logging
 import re
 import uuid
 import sqlparse
-from datetime import date, datetime
 
+from collections import OrderedDict
+from datetime import datetime
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
+from django.utils.datastructures import OrderedSet
+from sqlparse.tokens import Token
 
-from sqlparse.tokens import Token, Punctuation, Keyword, Operator
-
-from tablo.utils import get_jenks_breaks, dictfetchall
+from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
+from tablo.utils import get_jenks_breaks, dictfetchall
 
-TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', '/ncdjango/tmp')
+
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
+    'boolean': 'esriFieldTypeSmallInteger',
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
+    'character': 'esriFieldTypeString',
     'character varying': 'esriFieldTypeString',
     'double precision': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
@@ -47,6 +52,32 @@ ADJUSTED_GLOBAL_EXTENT = Extent({
 })
 
 logger = logging.getLogger(__name__)
+
+
+def get_fields(for_table):
+    fields = []
+    with connection.cursor() as c:
+        c.execute(
+            ' '.join((
+                'SELECT column_name, is_nullable, data_type',
+                'FROM information_schema.columns',
+                'WHERE table_name = %s',
+                'ORDER BY ordinal_position;'
+            )),
+            [for_table]
+        )
+        # c.description won't be populated without first running the query above
+        for field_info in c.fetchall():
+            field_type = field_info[2]
+            fields.append({
+                'name': field_info[0],
+                'alias': field_info[0],
+                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
+                'nullable': True if field_info[1] == 'YES' else False,
+                'editable': True
+            })
+
+    return fields
 
 
 class FeatureService(models.Model):
@@ -124,6 +155,10 @@ class FeatureServiceLayer(models.Model):
     time_interval_units = models.CharField(max_length=255, null=True)
     drawing_info = models.TextField()
 
+    _fields = None
+    _related_fields = None
+    _relations = None
+
     @property
     def extent(self):
         if self._extent is None:
@@ -156,26 +191,34 @@ class FeatureServiceLayer(models.Model):
 
     @property
     def fields(self):
-        fields = []
-        with connection.cursor() as c:
-            c.execute('select column_name, is_nullable, data_type from information_schema.columns where table_name = %s;', [self.table])
-            # c.description won't be populated without first running the query above
-            for field_info in c.fetchall():
-                field_type = field_info[2]
-                if field_info[0] == 'db_id':
-                    field_type = 'OID'
-                elif field_info[0] == POINT_FIELD_NAME:
-                    field_type = 'Geometry'
+        if self._fields is None:
 
-                fields.append({
-                    'name': field_info[0],
-                    'alias': field_info[0],
-                    'type': POSTGIS_ESRI_FIELD_MAPPING[field_type],
-                    'nullable': True if field_info[1] == 'YES' else False,
-                    'editable': True
-                })
+            fields = get_fields(self.table)
+            for field in fields:
+                if field['name'] == 'db_id':
+                    field['type'] = 'esriFieldTypeOID'
+                elif field['name'] == POINT_FIELD_NAME:
+                    field['type'] = 'esriFieldTypeGeometry'
+            self._fields = fields
 
-        return fields
+        return self._fields
+
+    @property
+    def relations(self):
+        if self._relations is None:
+            self._relations = self.featureservicelayerrelations_set.all()
+        return self._relations
+
+    @property
+    def related_fields(self):
+        if self._related_fields is None:
+
+            self._related_fields = OrderedDict()
+            for field in (f for r in self.relations for f in r.fields):
+                field_key = field['aliased']  # Will be related_title.field
+                self.related_fields[field_key] = field
+
+        return self._related_fields
 
     @property
     def time_info(self):
@@ -188,80 +231,268 @@ class FeatureServiceLayer(models.Model):
             }
         return None
 
-    def perform_query(self, **kwargs):
-        additional_where_clause = kwargs.get('additional_where_clause')
-        start_time = kwargs.get('start_time')
-        end_time = kwargs.get('end_time')
-        extent = kwargs.get('extent')
+    def perform_query(self, limit=0, offset=0, **kwargs):
+        limit, offset = max(limit, 0), max(offset, 0)
+
+        count_only = bool(kwargs.pop('count_only', False))
+        ids_only = bool(kwargs.pop('ids_only', False))
+        return_fields = [f.strip() for f in list(kwargs.get('return_fields') or '*')]
+        return_geometry = bool(kwargs.get('return_geometry', True))
         out_sr = kwargs.get('out_sr') or WEB_MERCATOR_SRID
-        object_ids = kwargs.get('object_ids', [])
-        return_fields = kwargs.get('return_fields', [])
-        return_geometry = kwargs.get('return_geometry', True)
-        only_return_count = kwargs.get('only_return_count', False)
+
+        additional_where_clause = kwargs.get('additional_where_clause')
+        additional_where_clause = additional_where_clause.replace('"', '') if additional_where_clause else None
+
+        order_by_fields = [f.strip() for f in kwargs.get('order_by_fields') or '']
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
-        if not self._validate_fields(return_fields) or not self._validate_where_clause(additional_where_clause):
-            raise ValueError("Invalid query parameters")
 
-        if only_return_count:
-            return_fields = ['count(*)']
-        elif return_geometry:
-            return_fields.append('ST_AsText(ST_Transform(dbasin_geom, {0}))'.format(out_sr))
+        if not ids_only:
+            include_related = bool(kwargs.get('object_ids'))
 
-        params = []   # Collect parameters to the query that we can let the SQL engine escape for us
-        where = '1=1'
-        if additional_where_clause:
-            # Need to escape any % in like clauses so they don't get in the way of query parameters later
-            where = additional_where_clause.replace('%', '%%')
-        if start_time:
-            if start_time == end_time:
-                where += " AND {layer_time_field} = %s".format(
-                    layer_time_field=self.start_time_field
-                )
-                params.append(start_time)
+            self._validate_fields(return_fields, include_related)
+            self._validate_fields(order_by_fields, include_related)
+
+        self._validate_where_clause(additional_where_clause)
+
+        # Build SELECT, JOIN, WHERE and ORDER BY from inputs
+
+        if count_only:
+            return_fields = order_by_fields = []
+            select_fields = 'COUNT(0)'
+        elif ids_only:
+            return_fields = order_by_fields = [self.object_id_field]
+            select_fields = 'DISTINCT {0}'.format(self._alias_fields(return_fields))
+        else:
+            if self.object_id_field not in return_fields:
+                return_fields.insert(0, self.object_id_field)
+
+            select_fields = self._expand_fields(return_fields)
+            if return_geometry:
+                select_fields += ', ST_AsText(ST_Transform("source"."dbasin_geom", {0}))'.format(out_sr)
+
+        join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
+        where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
+        order_by = '' if count_only else self._build_order_by_clause(
+            fields=order_by_fields, related_tables=(None if ids_only else related_tables)
+        )
+
+        query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit} {offset}'
+        query_clause = query_clause.format(
+            fields=select_fields, table=self.table, join=join.strip(), where=where.strip(), order_by=order_by,
+            limit='' if limit == 0 else 'LIMIT {limit}'.format(limit=limit + 1),
+            offset='' if offset == 0 else 'OFFSET {offset}'.format(offset=offset)
+        )
+
+        # Execute query with optional limit and offset, and prepare return data
+
+        with get_cursor() as c:
+            c.execute(query_clause, query_params)
+            queried_data = dictfetchall(c)
+
+        limited_data = 0 < limit < len(queried_data)
+        queried_data = queried_data[:-1] if limited_data else queried_data
+
+        return {'data': queried_data, 'exceeded_limit': limited_data}
+
+    def _alias_fields(self, fields):
+        """ Prepend table alias to fields, delimiting them in double quotes, but ignore '*' """
+
+        if not fields:
+            return self._expand_fields('*', True)
+        elif isinstance(fields, str):
+            fields = fields.split(',')
+
+        aliased_fields = [f if '.' in f else 'source.{0}'.format(f) for f in fields]
+        quoted_fields = '", "'.join('"."'.join(f.split('.')) for f in aliased_fields).join('""')
+
+        return quoted_fields.replace('"*"', '*')
+
+    def _expand_fields(self, fields, aliased_only=False):
+        """ Expand '*' in fields to those that will be queried, and optionally alias them to avoid clashes """
+
+        if isinstance(fields, str):
+            fields = fields.split(',')
+        if not any(f == '*' or '.' in f for f in fields):
+            return self._alias_fields(fields)
+
+        fields_to_expand = [self.object_id_field]
+        fields_to_expand.extend(r.source_column for r in self.relations)
+
+        for field in fields:
+            if field == '*':
+                fields_to_expand.extend(f['name'] for f in self.fields)
+            elif field.endswith('.*'):
+                related_prefix = field[:-1]
+                fields_to_expand.extend(f for f in self.related_fields if f.startswith(related_prefix))
             else:
-                where += " AND {layer_time_field} BETWEEN %s AND %s".format(
-                    layer_time_field=self.start_time_field
-                )
-                params.append(start_time)
-                params.append(end_time)
-        elif self.start_time_field and not only_return_count and not additional_where_clause:
-            # If layer has a time component, default is to show first time step
-            where += " AND {layer_time_field} = (SELECT MIN({layer_time_field}) FROM {table})".format(
-                layer_time_field=self.start_time_field,
-                table=self.table
+                fields_to_expand.append(field)
+
+        field_format = '{0}' if aliased_only else '{0} AS "{1}"'
+
+        return ', '.join(field_format.format(self._alias_fields(f), f) for f in OrderedSet(fields_to_expand))
+
+    def _build_join_clause(self, fields, where):
+        if not fields and where is None:
+            return '', []
+        elif where is None:
+            query_fields = set(fields)
+        else:
+            query_fields = set(fields).union(self._parse_where_clause(where)[0])
+
+        join_tables = query_fields.intersection(self.related_fields.keys())   # Filter by available related fields
+        join_tables = join_tables.union(f for f in query_fields if '*' in f)  # Ensure wildcard fields are included
+        join_tables = set(f[:f.index('.')] for f in join_tables if '.' in f)  # Derive distinct table prefixes
+        join_clause = ''
+
+        relations = self.relations.filter(related_title__in=join_tables)
+
+        for relation in relations:
+            join_clause += ' LEFT OUTER JOIN "{table}" AS "{related_title}"'.format(
+                table=relation.table, related_title=relation.related_title
+            )
+            join_clause += ' ON "source"."{source}" = "{related_title}"."{target}"'.format(
+                source=relation.source_column, related_title=relation.related_title, target=relation.target_column
             )
 
-        if object_ids:
-            where += ' AND {primary_key} IN ({object_id_list})'.format(
+        return join_clause, [r.related_title for r in relations]
+
+    def _build_where_clause(self, where, count_only, **kwargs):
+        """ :return: a Python format where clause with corresponding params for the SQL engine to escape """
+
+        start_time = kwargs.get('start_time')
+        end_time = kwargs.get('end_time')
+
+        if where is None:
+            where_clause = 'WHERE 1=1'
+        else:
+            where_clause = ''
+
+            for token in sqlparse.parse('WHERE {0}'.format(where.replace('%', '%%')))[0].flatten():
+                if token.ttype != Token.Name:
+                    where_clause += token.value
+                elif token.value != token.parent.value:
+                    # Token is aliased: just write the segments as they come
+                    where_clause += token.value.strip('"').join('""')
+                else:
+                    # Token is not aliased if parent doesn't include it: add source alias
+                    where_clause += '"source"."{field}"'.format(field=token.value.strip('"'))
+
+        query_params = []
+
+        if self.start_time_field:
+            layer_time_field = '"source"."{time_field}"'.format(time_field=self.start_time_field.lower())
+
+            if start_time:
+                if start_time == end_time:
+                    where_clause += ' AND {time_field} = %s'.format(time_field=layer_time_field)
+                    query_params.append(start_time)
+                else:
+                    where_clause += ' AND {time_field} BETWEEN %s AND %s'.format(time_field=layer_time_field)
+                    query_params.append(start_time)
+                    query_params.append(end_time)
+            elif where is None and not count_only:
+                # If layer has a time component, default is to show first time step
+                where_clause += ' AND {time_field} = (SELECT MIN({subquery_time_field}) FROM "{table}")'.format(
+                    time_field=layer_time_field,
+                    subquery_time_field=self.start_time_field,
+                    table=self.table
+                )
+
+        if kwargs.get('object_ids'):
+            object_ids = kwargs['object_ids']
+
+            where_clause += ' AND "source"."{primary_key}" IN ({object_id_list})'.format(
                 primary_key=PRIMARY_KEY_NAME,
                 object_id_list=','.join(['%s' for obj_id in object_ids]),
             )
             for obj_id in object_ids:
-                params.append(obj_id)
+                query_params.append(obj_id)
 
-        if extent:
-            where += ' AND ST_Intersects(dbasin_geom, ST_GeomFromText(%s, 3857)) '
-            params.append(extent.as_sql_poly())
+        if kwargs.get('extent'):
+            where_clause += ' AND ST_Intersects("source"."dbasin_geom", ST_GeomFromText(%s, 3857)) '
+            query_params.append(kwargs['extent'].as_sql_poly())
 
-        with get_cursor() as c:
-            # where clause may contain references to table and fields
-            query_clause = 'SELECT {fields} FROM {table} WHERE ' + where
-            query_clause = query_clause.format(
-                fields=','.join(return_fields),
-                table=self.table
-            )
-            c.execute(query_clause, params)
-            response = dictfetchall(c)
+        return where_clause, query_params
 
-        return response
+    def _build_order_by_clause(self, fields, related_tables=None):
+        order_by_clause = 'ORDER BY {fields}'
+
+        def insert_field(field_list, field, index):
+            if field not in field_list:
+                field_list.insert(0, field)
+            elif field_list[0] != field:
+                field_list.remove(field)
+                field_list.insert(0, field)
+
+        order_by_fields = list(fields or '')
+
+        if related_tables is None:
+            if not order_by_fields:
+                insert_field(order_by_fields, PRIMARY_KEY_NAME, 0)  # Ensure ordering by primary key if nothing else
+        else:
+            for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
+                insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
+
+        return order_by_clause.format(fields=self._expand_fields(order_by_fields, aliased_only=True))
+
+    def _parse_where_clause(self, where):
+        if where is None:
+            return None
+
+        parsed = sqlparse.parse('WHERE {where_clause}'.format(where_clause=where))
+        fields = set(t.parent.value.replace('"', '') for t in parsed[0].flatten() if t.ttype == Token.Name)
+
+        return fields, parsed[1:]  # Additional statements may occur but are invalid
+
+    def _validate_where_clause(self, where):
+
+        parsed = self._parse_where_clause(where)
+
+        if parsed is None:
+            return
+        elif parsed[1]:
+            raise InvalidSQLError('Invalid where clause')
+
+        self._validate_fields(parsed[0])
+
+    def _validate_fields(self, fields, include_related=True):
+        if isinstance(fields, str):
+            fields = fields.split(',')
+
+        query_fields = {field.replace('"', '') for field in fields}
+        if not query_fields:
+            return
+
+        all_related = ('{0}.*'.format(r.related_title) for r in self.relations)
+        valid_fields = {
+            'source': set(f['name'] for f in self.fields).union('*'),
+            'target': set(f for f in self.related_fields).union(all_related)
+        }
+
+        invalid_fields = query_fields.difference(valid_fields['source'])
+        if invalid_fields:
+
+            if include_related:
+                invalid_fields = invalid_fields.difference(valid_fields['target'])
+            else:
+                related_fields = invalid_fields.intersection(valid_fields['target'])
+                if related_fields:
+                    raise RelatedFieldsError(
+                        'Related fields not allowed: {0}'.format(', '.join(related_fields)),
+                        fields=related_fields
+                    )
+
+            if invalid_fields:
+                raise InvalidFieldsError(
+                    message='Invalid fields: {0}'.format(', '.join(invalid_fields)),
+                    fields=invalid_fields
+                )
 
     def get_distinct_geometries_across_time(self, *kwargs):
-        time_query = 'SELECT DISTINCT ST_AsText({geom_field}), count(*) FROM {table} GROUP BY ST_AsText({geom_field})'.format(
-            geom_field=POINT_FIELD_NAME,
-            table=self.table
-        )
+        time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'
+        time_query = time_query.format(geom_field=POINT_FIELD_NAME, table=self.table)
 
         with get_cursor() as c:
             c.execute(time_query)
@@ -269,39 +500,20 @@ class FeatureServiceLayer(models.Model):
 
         return response
 
-    def _validate_where_clause(self, where):
-        if where is None or where == '1=1':
-            return True
-
-        parsed_where_clause = sqlparse.parse('WHERE {where_clause}'.format(where_clause=where))
-        if len(parsed_where_clause) != 1:
-            # Where clause should only contain one statement (the WHERE clause), additional statements would
-            # be attempts at SQL injection
-            return False
-        else:
-            flat_clause = parsed_where_clause[0].flatten()
-            tokens_no_whitespace = [token for token in flat_clause if not token.is_whitespace() and token.ttype != Punctuation and token.ttype != Token.Literal.Number.Integer]
-            query_fields = []
-            for index, token in enumerate(tokens_no_whitespace):
-                if token.ttype in (Keyword, Operator.Comparison) and token.value not in ('WHERE', 'AND', 'OR', 'IS', 'NOT NULL', 'NULL'):
-                    query_fields.append(tokens_no_whitespace[index-1].value.replace('"', ''))
-
-            valid_fields = self._validate_fields(query_fields)
-            return valid_fields
-
-    def _validate_fields(self, fields):
-        test_fields = [field for field in fields if field != '*']
-        return len(test_fields) == 0 or set(test_fields).issubset([field['name'] for field in self.fields])
-
     def get_unique_values(self, field):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         unique_values = []
+        field_name = field
+        table = self.table
+        if '.' in field:
+            relationship_name, field_name = field.split('.')
+            table = self.relations.filter(related_title=relationship_name).first().table
+
         with get_cursor() as c:
             c.execute('SELECT distinct {field_name} FROM {table} ORDER BY {field_name}'.format(
-                table=self.table, field_name=field
+                table=table, field_name=field_name
             ))
             for row in c.fetchall():
                 unique_values.append(row[0])
@@ -309,8 +521,7 @@ class FeatureServiceLayer(models.Model):
 
     def get_equal_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         breaks = []
 
@@ -332,25 +543,26 @@ class FeatureServiceLayer(models.Model):
 
     def get_quantile_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
         sql_statement = """
-            SELECT all_data.{field} FROM
-                (SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number,
-                        {field}
-                   FROM {table}
-                  WHERE {field} IS NOT NULL
-                  ORDER BY {field}) all_data,
-                (SELECT ROUND((COUNT(*)/{break_count}),0) AS how_many
-                   FROM {table} serviceTable
-                  WHERE serviceTable.{field} IS NOT NULL) count_table
-            WHERE MOD(row_number,how_many)=0
-            ORDER BY all_data.{field}""".format(
-            field=field,
-            table=self.table,
-            break_count=break_count
-        )
+            SELECT all_data.{field}
+            FROM
+                (
+                    SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {field}
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                    ORDER BY {field}
+                ) all_data,
+                (
+                    SELECT ROUND((COUNT(0) / {break_count}), 0) AS how_many
+                    FROM {table} serviceTable
+                    WHERE serviceTable.{field} IS NOT NULL
+                ) count_table
+            WHERE MOD(row_number, how_many) = 0
+            ORDER BY all_data.{field}
+        """.format(field=field, table=self.table, break_count=break_count)
+
         values = []
 
         with get_cursor() as c:
@@ -371,32 +583,35 @@ class FeatureServiceLayer(models.Model):
 
     def get_natural_breaks(self, field, break_count):
 
-        if not self._validate_fields([field]):
-            raise ValueError('Invalid field')
+        self._validate_fields(field)
 
-        sql_statement = """SELECT service_table.{field} FROM
-                            (SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number,
-                            {primary_key}
-                                   FROM {table}
-                                  WHERE {field} IS NOT NULL
-                                  ORDER BY {field}) all_data,
-                                (SELECT count(*) AS total,
-                                        CASE WHEN COUNT(*) < {num_samples} THEN 1
-                                        ELSE ROUND((COUNT(*)/{num_samples}),0)
-                                        END AS how_many
-                                   FROM {table}
-                                  WHERE {field} IS NOT NULL) count_table,
-                                {table} service_table
-                            WHERE (MOD(row_number,how_many)=0 OR row_number = 1 OR row_number = total)
-                              AND service_table.{primary_key}=all_data.{primary_key}
-                            ORDER BY service_table.{field}""".format(
-            field=field,
-            primary_key=self.object_id_field,
-            table=self.table,
-            num_samples=1000
-        )
+        sql_statement = """
+            SELECT service_table.{field}
+            FROM {table} service_table,
+                (
+                    SELECT ROW_NUMBER() OVER (ORDER BY {field}) AS row_number, {primary_key}
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                    ORDER BY {field}
+                ) all_data,
+                (
+                    SELECT
+                        COUNT(0) AS total,
+                        CASE
+                            WHEN COUNT(0) < {num_samples} THEN 1
+                            ELSE ROUND((COUNT(0) / {num_samples}), 0)
+                        END AS how_many
+                    FROM {table}
+                    WHERE {field} IS NOT NULL
+                ) count_table
+            WHERE service_table.{primary_key} = all_data.{primary_key} AND
+                (
+                    MOD(row_number, how_many) = 0 OR
+                    row_number IN (1, total)
+                )
+            ORDER BY service_table.{field}
+        """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
 
-        values = []
         with get_cursor() as c:
             c.execute(sql_statement)
             values = [row[0] for row in c.fetchall()]
@@ -413,34 +628,34 @@ class FeatureServiceLayer(models.Model):
 
     def add_feature(self, feature):
 
+        system_cols = {PRIMARY_KEY_NAME, POINT_FIELD_NAME}
         with get_cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
-            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]]
+            colnames_in_table = [desc[0].lower() for desc in c.description if desc[0] not in system_cols]
 
         columns_not_present = colnames_in_table[0:]
 
         columns_in_request = feature['attributes'].copy()
-        for field in [PRIMARY_KEY_NAME, POINT_FIELD_NAME]:
+        for field in system_cols:
             if field in columns_in_request:
                 columns_in_request.pop(field)
 
         for key in columns_in_request:
             if key not in colnames_in_table:
-                raise Exception('attributes do not match')
+                raise AttributeError('attributes do not match')
             columns_not_present.remove(key)
 
         if len(columns_not_present):
-            raise Exception('Missing attributes {0}'.format(','.join(columns_not_present)))
+            raise AttributeError('Missing attributes {0}'.format(','.join(columns_not_present)))
 
         insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
             dataset_table_name=self.table,
             attribute_names=','.join(colnames_in_table),
-            placeholders=','.join(['%s' for name in colnames_in_table]),
+            placeholders=','.join(['%s'] * len(colnames_in_table)),
             primary_key=PRIMARY_KEY_NAME
         )
-
         set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(
             dataset_table_name=self.table,
             point_column=POINT_FIELD_NAME,
@@ -477,7 +692,7 @@ class FeatureServiceLayer(models.Model):
             colnames_in_table = [desc[0].lower() for desc in c.description]
 
         if PRIMARY_KEY_NAME not in feature['attributes']:
-            raise Exception('Cannot update feature without a primary key')
+            raise AttributeError('Cannot update feature without a primary key')
 
         primary_key = feature['attributes'][PRIMARY_KEY_NAME]
 
@@ -488,7 +703,7 @@ class FeatureServiceLayer(models.Model):
             if key == PRIMARY_KEY_NAME:
                 continue
             if key not in colnames_in_table:
-                raise Exception('attributes do not match')
+                raise AttributeError('attributes do not match')
             if key != POINT_FIELD_NAME:
                 argument_updates.append('{0} = %s'.format(key))
                 if key in date_fields and feature['attributes'][key]:
@@ -510,9 +725,11 @@ class FeatureServiceLayer(models.Model):
             )
 
         argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
-        update_command = ('UPDATE {dataset_table_name}'
-                         ' SET {set_portion}'
-                         ' WHERE {primary_key}=%s').format(
+        update_command = (
+            'UPDATE {dataset_table_name}'
+            ' SET {set_portion}'
+            ' WHERE {primary_key}=%s'
+        ).format(
             dataset_table_name=self.table,
             set_portion=','.join(argument_updates),
             primary_key=PRIMARY_KEY_NAME
@@ -535,6 +752,32 @@ class FeatureServiceLayer(models.Model):
             c.execute(delete_command, [primary_key])
 
         return primary_key
+
+
+class FeatureServiceLayerRelations(models.Model):
+    id = models.AutoField(auto_created=True, primary_key=True)
+    layer = models.ForeignKey(FeatureServiceLayer)
+    related_index = models.PositiveIntegerField(default=0)
+    related_title = models.CharField(max_length=255)
+    source_column = models.CharField(max_length=255)
+    target_column = models.CharField(max_length=255)
+
+    _fields = None
+
+    @property
+    def fields(self):
+        if self._fields is None:
+
+            fields = get_fields(self.table)
+            for field in fields:
+                field['aliased'] = '{0}.{1}'.format(self.related_title, field['name'])
+            self._fields = fields
+
+        return self._fields
+
+    @property
+    def table(self):
+        return '{table}_{index}'.format(table=self.layer.table, index=self.related_index)
 
 
 def delete_data_table(sender, instance, **kwargs):
@@ -577,11 +820,12 @@ def copy_data_table_for_import(dataset_id):
 
     alter_table_command = (
         'ALTER TABLE {import_table} ADD PRIMARY KEY ({primary_key}), '
-        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')').format(
-            import_table=import_table_name,
-            primary_key=PRIMARY_KEY_NAME,
-            sequence_name=sequence_name
-        )
+        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')'
+    ).format(
+        import_table=import_table_name,
+        primary_key=PRIMARY_KEY_NAME,
+        sequence_name=sequence_name
+    )
 
     alter_sequence_command = 'ALTER SEQUENCE {sequence_name} owned by {import_table}.{primary_key}'.format(
         import_table=import_table_name,
@@ -591,11 +835,12 @@ def copy_data_table_for_import(dataset_id):
 
     alter_sequence_start_command = (
         'SELECT setval(\'{sequence_name}\', (select max({primary_key})+1 '
-        'from {import_table}), false)').format(
-            import_table=import_table_name,
-            primary_key=PRIMARY_KEY_NAME,
-            sequence_name=sequence_name
-        )
+        'from {import_table}), false)'
+    ).format(
+        import_table=import_table_name,
+        primary_key=PRIMARY_KEY_NAME,
+        sequence_name=sequence_name
+    )
 
     index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
         table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
@@ -728,9 +973,11 @@ def add_or_update_database_fields(table_name, fields):
         required = field.get('required', False)
         value = field.get('value')
 
-        check_command = ('SELECT EXISTS('
-                         'SELECT column_name FROM information_schema.columns '
-                         'WHERE table_name=%s and column_name=%s)')
+        check_command = (
+            'SELECT EXISTS('
+            'SELECT column_name FROM information_schema.columns '
+            'WHERE table_name=%s and column_name=%s)'
+        )
         with get_cursor() as c:
             c.execute(check_command, (table_name, column_name))
             column_exists = c.fetchone()[0]
@@ -778,7 +1025,7 @@ def add_point_column(dataset_id, is_import=True):
         c.execute(index_command)
 
 
-def populate_point_data(id, csv_info, is_import=True):
+def populate_point_data(pk, csv_info, is_import=True):
 
     srid = csv_info['srid']
 
@@ -795,13 +1042,13 @@ def populate_point_data(id, csv_info, is_import=True):
         )
 
     update_command = 'UPDATE {table_name} SET {field_name} = {make_point_command}'.format(
-        table_name=TABLE_NAME_PREFIX + id + (IMPORT_SUFFIX if is_import else ''),
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
         field_name=POINT_FIELD_NAME,
         make_point_command=make_point_command
     )
 
     clear_null_command = 'DELETE FROM {table_name} WHERE {field_name} IS NULL'.format(
-        table_name=TABLE_NAME_PREFIX + id + (IMPORT_SUFFIX if is_import else ''),
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
         field_name=POINT_FIELD_NAME,
     )
 
@@ -812,26 +1059,27 @@ def populate_point_data(id, csv_info, is_import=True):
 
 def determine_extent(table):
 
-        try:
-            query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
-                field_name=POINT_FIELD_NAME,
-                table_name=table
-            )
+    try:
+        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
+            field_name=POINT_FIELD_NAME,
+            table_name=table
+        )
 
-            with get_cursor() as c:
-                c.execute(query)
-                extent_box = c.fetchone()[0]
-                if extent_box:
-                    extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
-                else:
-                    extent = ADJUSTED_GLOBAL_EXTENT
+        with get_cursor() as c:
+            c.execute(query)
+            extent_box = c.fetchone()[0]
+            if extent_box:
+                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
+            else:
+                extent = ADJUSTED_GLOBAL_EXTENT
 
-        except DatabaseError as error:
-            logger.excdeption('Error generating extent for table {0}, returning adjusted global extent'.format(table))
-            # Default to adjusted global extent if there is an error, similar to the one we present on the map page
-            extent = ADJUSTED_GLOBAL_EXTENT
+    except DatabaseError:
+        logger.excdeption('Error generating extent for table {0}, returning adjusted global extent'.format(table))
+        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
+        extent = ADJUSTED_GLOBAL_EXTENT
 
-        return extent.as_dict()
+    return extent.as_dict()
+
 
 def get_cursor():
     return connection.cursor()
@@ -854,6 +1102,6 @@ class TemporaryFile(models.Model):
     @property
     def extension(self):
         if self.filename.find(".") != -1:
-            return self.filename[self.filename.rfind(".")+1:]
+            return self.filename[self.filename.rfind(".") + 1:]
         else:
             return ""
