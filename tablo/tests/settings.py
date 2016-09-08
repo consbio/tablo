@@ -9,9 +9,7 @@ DATABASES = {
 }
 USE_TZ = False
 SITE_ID = 1
-SECRET_KEY = '12345'
 
-ROOT_URLCONF = 'test_app.urls'
 STATIC_URL = '/static/'
 
 INSTALLED_APPS = (
