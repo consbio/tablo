@@ -1,6 +1,8 @@
 from collections import OrderedDict
 
 from django.test import TestCase
+
+from tablo.exceptions import RelatedFieldsError
 from tablo.models import FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations
 from unittest.mock import patch, PropertyMock
 
@@ -48,8 +50,11 @@ class PerformQueryTestCase(TestCase):
     def test_no_where_clause(self):
         self.validate_perform_query_sql(
             {},
-            ('SELECT "source".*, ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
-             'FROM "{table}" AS "source"  WHERE 1=1 ORDER BY "source".* LIMIT 0 OFFSET 0').format(
+            (
+                'SELECT "source"."db_id" AS "db_id", "source"."base_table_field" AS "base_table_field", '
+                'ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) FROM "{table}" AS "source"  '
+                'WHERE 1=1 ORDER BY "source"."db_id", "source"."base_table_field"  '
+            ).format(
                 table=TABLE_NAME
             )
         )
@@ -66,9 +71,10 @@ class PerformQueryTestCase(TestCase):
             }])
             self.validate_perform_query_sql(
                 {'additional_where_clause': 'TEST=1'},
-                ('SELECT "source".*, ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
+                ('SELECT "source"."db_id" AS "db_id", "source"."base_table_field" AS "base_table_field", '
+                 '"source"."TEST" AS "TEST", ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
                  'FROM "{table}" AS "source"  WHERE "source"."TEST"=1 '
-                 'ORDER BY "source".* LIMIT 0 OFFSET 0').format(
+                 'ORDER BY "source"."db_id", "source"."base_table_field", "source"."TEST"  ').format(
                     table=TABLE_NAME
                 )
             )
@@ -97,11 +103,13 @@ class PerformQueryTestCase(TestCase):
 
                 self.validate_perform_query_sql(
                     {'additional_where_clause': '("measurements.well_depth" > 50)'},
-                    ('SELECT "source".*, ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
-                     'FROM "{table}" AS "source" LEFT OUTER JOIN "{table}_0" AS "measurements" '
-                     'ON "source"."base_table_field" = "measurements"."base_table_field_ref" '
-                     'WHERE ("measurements"."well_depth" > 50) '
-                     'ORDER BY "source"."base_table_field" LIMIT 0 OFFSET 0').format(
+                    (
+                        'SELECT "source"."db_id" AS "db_id", "source"."base_table_field" AS "base_table_field", '
+                        'ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) FROM "{table}" AS "source" '
+                        'LEFT OUTER JOIN "{table}_0" AS "measurements" '
+                        'ON "source"."base_table_field" = "measurements"."base_table_field_ref" '
+                        'WHERE ("measurements"."well_depth" > 50) ORDER BY "source"."base_table_field"  '
+                    ).format(
                         table=TABLE_NAME
                     )
                 )
@@ -139,17 +147,18 @@ class PerformQueryTestCase(TestCase):
                         'ids_only': True,
                         'return_geometry': False
                     },
-                    ('SELECT DISTINCT "source"."{object_id_field}" '
-                     'FROM "{table}" AS "source" LEFT OUTER JOIN "{table}_0" AS "measurements" '
-                     'ON "source"."base_table_field" = "measurements"."base_table_field_ref" '
-                     'WHERE ("measurements"."well_depth" > 50) '
-                     'ORDER BY "source"."{object_id_field}" LIMIT 0 OFFSET 0').format(
+                    (
+                        'SELECT DISTINCT "source"."{object_id_field}" FROM "{table}" AS "source" '
+                        'LEFT OUTER JOIN "{table}_0" AS "measurements" '
+                        'ON "source"."base_table_field" = "measurements"."base_table_field_ref" '
+                        'WHERE ("measurements"."well_depth" > 50) ORDER BY "source"."{object_id_field}"  '
+                    ).format(
                         table=TABLE_NAME,
                         object_id_field=self.feature_service_layer.object_id_field
                     )
                 )
 
-    def test_duplicate_field(self):
+    def test_failure_on_related(self):
         with patch('tablo.models.FeatureServiceLayer.fields', new_callable=PropertyMock) as fields:
             with patch('tablo.models.FeatureServiceLayer.related_fields', new_callable=PropertyMock) as related_fields:
                 fields.return_value = ([
@@ -176,23 +185,8 @@ class PerformQueryTestCase(TestCase):
                     },
                 })
 
-                self.validate_perform_query_sql(
-                    {
-                        'return_fields': ['*', 'measurements.*'],
-                    },
-                    ('SELECT "source"."db_id" AS "db_id", "source"."casgem_station_id" AS "casgem_station_id", '
-                     '"measurements"."casgem_station_id" AS "measurements.casgem_station_id", '
-                     '"measurements"."something_else" AS "measurements.something_else", '
-                     'ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
-                     'FROM "{table}" AS "source" LEFT OUTER JOIN "{table}_0" AS "measurements" '
-                     'ON "source"."casgem_station_id" = "measurements"."casgem_station_id" '
-                     'WHERE 1=1 '
-                     'ORDER BY "source"."casgem_station_id" LIMIT 0 OFFSET 0').format(
-                        table=TABLE_NAME,
-                        object_id_field=self.feature_service_layer2.object_id_field
-                    ),
-                    layer=self.feature_service_layer2
-                )
+                with self.assertRaises(RelatedFieldsError):
+                    self.feature_service_layer.perform_query(return_fields=['*', 'measurements.*'])
 
     def validate_perform_query_sql(self, perform_query_args, expected_sql, expected_sql_args=None, layer=None):
         """
