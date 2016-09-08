@@ -3,6 +3,7 @@ python:
     - "3.5"
 env:
     - TOXENV=django18
+    - TOXENV=coverage
 install:
     - pip install tox
 script:
