@@ -1,6 +1,7 @@
 # Tablo
 
 [![Build Status](https://travis-ci.org/consbio/tablo.svg)](https://travis-ci.org/consbio/tablo)
+[![Documentation Status](https://readthedocs.org/projects/tablo/badge/?version=latest)](http://tablo.readthedocs.io/en/latest/?badge=latest)
 
 ## What is it?
 
