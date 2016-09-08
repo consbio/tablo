@@ -11,6 +11,7 @@ USE_TZ = False
 SITE_ID = 1
 
 STATIC_URL = '/static/'
+SECRET_KEY = 'NOT_SO_SECRET'
 
 INSTALLED_APPS = (
     'django.contrib.admin',
