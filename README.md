@@ -1,3 +1,5 @@
+# Travis CI Status [![Build Status](https://travis-ci.org/consbio/tablo.svg)](https://travis-ci.org/consbio/tablo)
+
 # Tablo
 
 ## What is it?
