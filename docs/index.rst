@@ -13,3 +13,5 @@ within a PostGIS database.
    :maxdepth: 2
 
    install
+   interfaces/index
+   upload/index
