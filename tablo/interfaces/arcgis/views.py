@@ -449,11 +449,15 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
 
         if not to_be_related:
             # Prevent duplicate source items when related items were in the join but not selected
-
             item.pop('related', None)
-            item_hash = item[for_layer.object_id_field]
-            if item_hash not in already_added:
-                already_added[item_hash] = feature
+
+            # Time queries will not have object_id_field, but can just include all features
+            if for_layer.object_id_field in item:
+                item_hash = item[for_layer.object_id_field]
+                if item_hash not in already_added:
+                    already_added[item_hash] = feature
+                    features.append(feature)
+            else:
                 features.append(feature)
         else:
             # Append unique source items by item hash, and append related information under each
