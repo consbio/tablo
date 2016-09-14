@@ -250,7 +250,11 @@ class QueryView(FeatureLayerView):
             search_params['object_ids'] = object_ids
 
         if kwargs.get('geometryType') == 'esriGeometryEnvelope':
-            search_params['extent'] = Extent(json.loads(kwargs['geometry']))
+            search_params['extent'] = Extent(json.loads(kwargs['geometry'])).as_sql_poly()
+        elif kwargs.get('geometryType') == 'esriGeometryPolygon':
+            search_params['extent'] = convert_esri_polygon_to_wkt(json.loads(kwargs['geometry']))
+        else:
+            return HttpResponseBadRequest(json.dumps({'error': 'Unsupported geometryType'}))
 
         if not return_ids_only and kwargs.get('outFields'):
             return_fields = kwargs['outFields'].split(',') if kwargs.get('outFields') else []
@@ -387,6 +391,19 @@ def generate_classified_renderer(classification_def, layer):
         'minValue': breaks[0],
         'classBreakInfos': class_break_infos
     }
+
+
+def convert_esri_polygon_to_wkt(polygon_json):
+    polygon_string = 'MULTIPOLYGON(('
+    for ring in polygon_json['rings']:
+        polygon_string += '('
+        for item in ring:
+            polygon_string += '{0} {1},'.format(str(item[0]), str(item[1]))
+        polygon_string = polygon_string[:-1]
+        polygon_string += '),'
+    polygon_string = polygon_string[:-1]
+    polygon_string += '))'
+    return polygon_string
 
 
 def convert_wkt_to_esri_feature(response_items, for_layer):

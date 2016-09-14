@@ -412,7 +412,7 @@ class FeatureServiceLayer(models.Model):
 
         if kwargs.get('extent'):
             where_clause += ' AND ST_Intersects("source"."dbasin_geom", ST_GeomFromText(%s, 3857)) '
-            query_params.append(kwargs['extent'].as_sql_poly())
+            query_params.append(kwargs['extent'])
 
         return where_clause, query_params
 
