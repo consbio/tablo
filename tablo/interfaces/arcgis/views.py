@@ -249,12 +249,14 @@ class QueryView(FeatureLayerView):
         if object_ids:
             search_params['object_ids'] = object_ids
 
-        if kwargs.get('geometryType') == 'esriGeometryEnvelope':
-            search_params['extent'] = Extent(json.loads(kwargs['geometry'])).as_sql_poly()
-        elif kwargs.get('geometryType') == 'esriGeometryPolygon':
-            search_params['extent'] = convert_esri_polygon_to_wkt(json.loads(kwargs['geometry']))
-        else:
-            return HttpResponseBadRequest(json.dumps({'error': 'Unsupported geometryType'}))
+        geometry_type = kwargs.get('geometryType')
+        if geometry_type:
+            if geometry_type == 'esriGeometryEnvelope':
+                search_params['extent'] = Extent(json.loads(kwargs['geometry'])).as_sql_poly()
+            elif geometry_type == 'esriGeometryPolygon':
+                search_params['extent'] = convert_esri_polygon_to_wkt(json.loads(kwargs['geometry']))
+            else:
+                return HttpResponseBadRequest(json.dumps({'error': 'Unsupported geometryType'}))
 
         if not return_ids_only and kwargs.get('outFields'):
             return_fields = kwargs['outFields'].split(',') if kwargs.get('outFields') else []
