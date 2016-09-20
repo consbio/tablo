@@ -101,7 +101,7 @@ class FeatureServiceLayerDetailView(DetailView):
             'id': self.object.layer_order
         }
 
-        field_attrs = {'name', 'type', 'relates_to'}
+        field_attrs = {'name', 'type', 'relatesTo'}
         data['relatedTables'] = [
             {
                 'name': r.related_title,
