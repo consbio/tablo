@@ -216,6 +216,7 @@ class FeatureServiceResource(ModelResource):
 class FeatureServiceLayerRelationsResource(ModelResource):
 
     layer_id = fields.IntegerField(attribute='layer_id', readonly=True)
+    field_defs = fields.ListField(attribute='fields', readonly=True)
 
     class Meta:
         object_class = FeatureServiceLayerRelations
@@ -231,6 +232,7 @@ class FeatureServiceLayerRelationsResource(ModelResource):
 class FeatureServiceLayerResource(ModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
+    field_defs = fields.ListField(attribute='fields', readonly=True)
     relations = fields.ToManyField(
         FeatureServiceLayerRelationsResource,
         attribute='featureservicelayerrelations_set', full=True, readonly=True, null=True
