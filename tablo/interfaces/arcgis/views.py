@@ -101,10 +101,14 @@ class FeatureServiceLayerDetailView(DetailView):
             'id': self.object.layer_order
         }
 
+        field_attrs = {'name', 'type', 'relates_to'}
         data['relatedTables'] = [
             {
                 'name': r.related_title,
-                'fields': [{'name': f['name'], 'type': f['type']} for f in r.fields]
+                'fields': [{
+                    # Include only specified field attributes if they are present
+                    attr: f[attr] for attr in f if attr in field_attrs and attr in f
+                } for f in r.fields]
             } for r in self.object.relations
         ]
 

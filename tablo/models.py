@@ -771,6 +771,8 @@ class FeatureServiceLayerRelations(models.Model):
             fields = get_fields(self.table)
             for field in fields:
                 field['qualified'] = '{0}.{1}'.format(self.related_title, field['name'])
+                if field['name'] == self.source_column:
+                    field['relates_to'] = self.target_column
             self._fields = fields
 
         return self._fields
