@@ -243,7 +243,18 @@ class FeatureServiceLayer(models.Model):
         additional_where_clause = kwargs.get('additional_where_clause')
         additional_where_clause = additional_where_clause.replace('"', '') if additional_where_clause else None
 
-        order_by_fields = [f.strip() for f in kwargs.get('order_by_fields') or '']
+        # Break out fields and DESC / ASC modifiers
+        order_by_field_objs = []
+        for field in [f.strip() for f in kwargs.get('order_by_fields') or '']:
+            m = re.match('(\S*)\s?(asc|desc)?', field, re.IGNORECASE)
+            field_obj = {'field_name': m.group(1)}
+            try:
+                field_obj['order_modifier'] = m.group(2)
+            except IndexError:
+                pass  # No modifier
+            order_by_field_objs.append(field_obj)
+
+        order_by_field_names = [f['field_name'] for f in order_by_field_objs]
 
         # These are the possible points of SQL injection. All other dynamically composed pieces of SQL are
         # constructed using items within the database, or are escaped using the database engine.
@@ -252,17 +263,17 @@ class FeatureServiceLayer(models.Model):
             include_related = bool(kwargs.get('object_ids'))
 
             self._validate_fields(return_fields, include_related)
-            self._validate_fields(order_by_fields, include_related)
+            self._validate_fields(order_by_field_names, include_related)
 
         self._validate_where_clause(additional_where_clause)
 
         # Build SELECT, JOIN, WHERE and ORDER BY from inputs
 
         if count_only:
-            return_fields = order_by_fields = []
+            return_fields = order_by_field_names = []
             select_fields = 'COUNT(0)'
         elif ids_only:
-            return_fields = order_by_fields = [self.object_id_field]
+            return_fields = order_by_field_names = [self.object_id_field]
             select_fields = 'DISTINCT {0}'.format(self._alias_fields(return_fields))
         else:
             if self.object_id_field not in return_fields:
@@ -275,7 +286,7 @@ class FeatureServiceLayer(models.Model):
         join, related_tables = self._build_join_clause(return_fields, additional_where_clause)
         where, query_params = self._build_where_clause(additional_where_clause, count_only, **kwargs)
         order_by = '' if count_only else self._build_order_by_clause(
-            fields=order_by_fields, related_tables=(None if ids_only else related_tables)
+            field_objs=order_by_field_objs, related_tables=(None if ids_only else related_tables)
         )
 
         query_clause = 'SELECT {fields} FROM "{table}" AS "source" {join} {where} {order_by} {limit} {offset}'
@@ -416,26 +427,41 @@ class FeatureServiceLayer(models.Model):
 
         return where_clause, query_params
 
-    def _build_order_by_clause(self, fields, related_tables=None):
+    def _build_order_by_clause(self, field_objs, related_tables=None):
         order_by_clause = 'ORDER BY {fields}'
 
-        def insert_field(field_list, field, index):
-            if field not in field_list:
+        def insert_field(field_list, field):
+            matching_field = [d for d in field_list if d['field_name'] == field['field_name']]
+            if not matching_field:
                 field_list.insert(0, field)
-            elif field_list[0] != field:
+            elif field_list[0]['field_name'] != field['field_name']:
                 field_list.remove(field)
                 field_list.insert(0, field)
 
-        order_by_fields = list(fields or '')
+        order_by_field_objs = list(field_objs or '')
 
         if related_tables is None:
-            if not order_by_fields:
-                insert_field(order_by_fields, PRIMARY_KEY_NAME, 0)  # Ensure ordering by primary key if nothing else
+            if not order_by_field_objs:
+                # Ensure ordering by primary key if nothing else
+                insert_field(order_by_field_objs, {'field_name': PRIMARY_KEY_NAME})
         else:
             for relation in self.relations.filter(related_title__in=related_tables).order_by('-related_index'):
-                insert_field(order_by_fields, relation.source_column, 0)  # Ensure ordering by source table keys
+                # Ensure ordering by source table keys
+                insert_field(order_by_field_objs, {'field_name': relation.source_column})
 
-        return order_by_clause.format(fields=self._expand_fields(order_by_fields, aliased_only=True))
+        if not order_by_field_objs:
+            all_fields = self._expand_fields([])
+        else:
+            # Expand out the fields individually, and add their modifiers (ASC / DESC) if they exist
+            expanded_fields = []
+            for field_obj in order_by_field_objs:
+                expanded_field = self._expand_fields([field_obj['field_name']], aliased_only=True)
+                if field_obj.get('order_modifier'):
+                    expanded_field = expanded_field + ' ' + field_obj['order_modifier']
+                expanded_fields.append(expanded_field)
+            all_fields = ', '.join(expanded_fields)
+
+        return order_by_clause.format(fields=all_fields)
 
     def _parse_where_clause(self, where):
         if where is None:
