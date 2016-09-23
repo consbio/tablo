@@ -158,6 +158,51 @@ class PerformQueryTestCase(TestCase):
                     )
                 )
 
+    def test_desc_and_asc(self):
+        with patch('tablo.models.FeatureServiceLayer.fields', new_callable=PropertyMock) as fields:
+            with patch('tablo.models.FeatureServiceLayer.related_fields', new_callable=PropertyMock) as related_fields:
+                fields.return_value = ([
+                    {
+                        'name': 'TEST',
+                        'alias': 'TEST',
+                        'type': 'esriFieldTypeInteger',
+                        'nullable': True,
+                        'editable': True
+                    },
+                    {
+                        'name': 'MAKE_ME_ASC',
+                        'alias': 'Make me ASC',
+                        'type': 'esriFieldTypeInteger',
+                        'nullable': True,
+                        'editable': True
+                    },
+                    {
+                        'name': 'MAKE_ME_DESC',
+                        'alias': 'Make me DESC',
+                        'type': 'esriFieldTypeInteger',
+                        'nullable': True,
+                        'editable': True
+                    }
+                ])
+
+                self.validate_perform_query_sql(
+                    {
+                        'order_by_fields': ['MAKE_ME_ASC ASC', 'TEST', 'MAKE_ME_DESC DESC']
+                    },
+                    (
+                        'SELECT "source"."db_id" AS "db_id", '
+                        '"source"."base_table_field" AS "base_table_field", '
+                        '"source"."TEST" AS "TEST", '
+                        '"source"."MAKE_ME_ASC" AS "MAKE_ME_ASC", '
+                        '"source"."MAKE_ME_DESC" AS "MAKE_ME_DESC", '
+                        'ST_AsText(ST_Transform("source"."dbasin_geom", 3857)) '
+                        'FROM "db_table" AS "source"  WHERE 1=1 '
+                        'ORDER BY "source"."MAKE_ME_ASC" ASC, "source"."TEST", "source"."MAKE_ME_DESC" DESC  '
+                    ).format(
+                        table=TABLE_NAME
+                    )
+                )
+
     def test_failure_on_related(self):
         with patch('tablo.models.FeatureServiceLayer.fields', new_callable=PropertyMock) as fields:
             with patch('tablo.models.FeatureServiceLayer.related_fields', new_callable=PropertyMock) as related_fields:
