@@ -9,9 +9,11 @@ Tablo
 Tablo is a lightweight Django application that creates a interface layer for interacting with spatial data stored
 within a PostGIS database.
 
+.. automodule:: tablo
+
 .. toctree::
    :maxdepth: 2
-
+   
    install
    interfaces/index
    upload/index

@@ -219,6 +219,40 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
+    """
+    Query is the main way data is retrieved from a feature service. This implements an api similar to ArcGIS, but
+    limited to the following parameters listed below.
+
+    :Keyword Arguments:
+        * **returnIdsOnly** (*boolean*)
+            Returns only the ObjectIDs of the matching features
+        * **returnCountOnly** (*boolean*)
+            Returns only the count of the matching features
+        * **objectIds** (*comma-separated list*)
+            A comma-separated list of ObjectIDs for the features in the table that you want to query
+        * **limit** (*int*)
+            The maximum number of features returned by the query
+        * **offset** (*int*)
+            The starting record number for the query, often used in concert with the limit to paginate
+            groups of responses
+        * **where** (*string*)
+            A where clause for the query
+        * **time** (*[float, float]*)
+            The start_time and end_time for the query (in seconds since the epoch)
+        * **geometryType** (*string*)
+            The type of geometry sent in the geometry argument. Valid values are
+            `esriGeometryEnvelope` and `esriGeometryPolygon`
+        * **outFields** (*string List*)
+            The names of the attributes to include in the response
+        * **orderByFields** (*string List*)
+            The names of the attributes to order the response by. Optional ASC and DESC flags can be used here to
+            specify ascending or descending order. The default order is ASC.
+        * **returnGeometry** (*boolean*)
+            Whether or not to return the geometry of the feature in the query response.
+        * **outSR** (*spatial reference*)
+            The spatial reference for the returned geometry.
+    """
+
     query_limit_default = QUERY_LIMIT
 
     def handle_request(self, request, **kwargs):
