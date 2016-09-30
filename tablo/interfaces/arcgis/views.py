@@ -1,3 +1,22 @@
+"""
+This interface layer provides a lightweight interface to the underlying PostGIS data stored in Tablo similar to that
+provided by an `ArcGIS feature service <http://resources.arcgis.com/en/help/rest/apiref/featureserver.html>`_.
+The services stored in Tablo can be accessed using endpoints such as
+``{tablo_server}/rest/services/{service_id}/FeatureServer``, where tablo_server is the host name of the server
+and service_id is the ID of the service within Tablo.
+
+Accessing the FeatureServer endpoint will provide data about the Feature Service itself, such as version and layer
+information. Since these represent feature services, they are limited to a single layer, so the
+``{tablo_server}/rest/services/{service_id}/FeatureServer/0`` endpoint will give more information about the specific
+layer properties, such as attributes, extent and related tables (if they exist).
+
+This is the main interface layer that most external applications will use to access and query the spatial data
+stored within Tablo. The access points here are open and not restricted by any authentication layers, so authentication
+would need to happen outside of Tablo.
+
+The Feature Server Layer will have more information provided by the layer specific endpoints.
+"""
+
 import csv
 import io
 import json
@@ -101,10 +120,14 @@ class FeatureServiceLayerDetailView(DetailView):
             'id': self.object.layer_order
         }
 
+        field_attrs = {'name', 'type', 'relatesTo'}
         data['relatedTables'] = [
             {
                 'name': r.related_title,
-                'fields': [{'name': f['name'], 'type': f['type']} for f in r.fields]
+                'fields': [{
+                    # Include only specified field attributes if they are present
+                    attr: f[attr] for attr in f if attr in field_attrs and attr in f
+                } for f in r.fields]
             } for r in self.object.relations
         ]
 
@@ -167,6 +190,52 @@ class FeatureLayerPostView(FeatureLayerView):
 
 
 class GenerateRendererView(FeatureLayerView):
+    """
+    GenerateRenderer operation groups data using the supplied classificationDef to create a renderer object. This
+    renderer object can then be used as a style or to create a legend. It can be accessed using the endpoint at
+    ``{tablo_server}/rest/services/{service_id}/FeatureServer/0/generateRenderer``.
+
+    :Keyword Arguments:
+        * **classificationDef**
+            A `classificationDef` object with a JSON syntax like:
+
+            .. code-block:: json
+
+                {
+                    "type": "classBreaksDef",
+                    "classificationField": "POP2010",
+                    "classificationMethod": "esriClassifyNaturalBreaks",
+                    "breakCount": 5,
+                    "normalizationType": "esriNormalizeByField",
+                    "normalizationField": "Area"
+                }
+    :return:
+        An ArcGIS renderer JSON object, like this:
+
+        .. code-block:: json
+
+            {
+                "type": "simple",
+                "symbol":
+                {
+                    "type": "esriSMS",
+                    "style": "esriSMSCircle",
+                    "color": [255,0,0,255],
+                    "size": 5,
+                    "angle": 0,
+                    "xoffset": 0,
+                    "yoffset": 0,
+                    "outline":
+                    {
+                     "color": [0,0,0,255],
+                     "width": 1
+                    }
+                },
+                "label": "",
+                "description": ""
+            }
+
+    """
 
     def handle_request(self, request, **kwargs):
 
@@ -192,6 +261,60 @@ class GenerateRendererView(FeatureLayerView):
 
 
 class TimeQueryView(FeatureLayerView):
+    """
+    TimeQuery is a way to get back consolidated time data about a time-enabled feature service in Tablo. It is
+    an extension to the base ArcGIS interface, but is built on top of it. It can be accessed at the
+    ``{tablo_server}/rest/services/{service_id}/FeatureServer/0/query`` endpoint. It does not take any
+    keyword arguments but returns a list of features that specify the location and count of feature occurrences
+    over the full time of the feature service's time extent.
+
+    :response:
+        A JSON object similar to the following:
+
+        .. code-block:: json
+
+            {
+                "fields":[
+                    {
+                        "type":"esriFieldTypeInteger",
+                        "name":"count",
+                        "alias":"count"
+                    }
+                ],
+                "geometryType":"esriGeometryPoint",
+                "count":3,
+                "features":[
+                    {
+                        "attributes":{
+                            "count":90
+                        },
+                        "geometry":{
+                            "y":4020267.35731412,
+                            "x":-12974132.1182389
+                        }
+                    },
+                    {
+                        "attributes":{
+                            "count":173
+                        },
+                        "geometry":{
+                            "y":4021352.9816459,
+                            "x":-12978661.118326
+                        }
+                    },
+                    {
+                        "attributes":{
+                            "count":1572
+                        },
+                        "geometry":{
+                            "y":4020153.56924836,
+                            "x":-12978123.2336784
+                        }
+                    }
+                ]
+            }
+
+    """
 
     def handle_request(self, request, **kwargs):
 
@@ -215,6 +338,50 @@ class TimeQueryView(FeatureLayerView):
 
 
 class QueryView(FeatureLayerView):
+    """
+    Query is the main way data is retrieved from a feature service. This implements an api similar to
+    ArcGIS `<http://resources.arcgis.com/en/help/rest/apiref/fsquery.html>`_, but
+    limited to the following parameters listed below. It can be accessed using the endpoint at
+    ``{tablo_server}/rest/services/{service_id}/FeatureServer/0/query``.
+
+    Keyword arguments can be passed as query arguments such as
+    ``{tablo_server}/rest/services/{service_id}/FeatureServer/0/query?f=json&offset=2&returnIdsOnly=true``
+
+    :Keyword Arguments:
+        * **geometryType**
+            (`string`) The type of geometry sent in the geometry argument. Valid values are
+            `esriGeometryEnvelope` and `esriGeometryPolygon`
+        * **limit**
+            (`int`) The maximum number of features returned by the query
+        * **objectIds**
+            (`comma-separated list`) A comma-separated list of ObjectIDs for the features in the table that you want
+            to query
+        * **offset**
+            (`int`) The starting record number for the query, often used in concert with the limit to paginate
+            groups of responses
+        * **orderByFields**
+            (`string List`) The names of the attributes to order the response by. Optional ASC and DESC flags can
+            be used here to specify ascending or descending order. The default order is ASC.
+        * **outFields**
+            (`string List`) The names of the attributes to include in the response
+        * **outSR**
+            (`spatial reference`) The spatial reference for the returned geometry.
+        * **returnCountOnly**
+            (`boolean`) Returns only the count of the matching features
+        * **returnGeometry**
+            (`boolean`) Whether or not to return the geometry of the feature in the query response.
+        * **returnIdsOnly**
+            (`boolean`) Returns only the ObjectIDs of the matching features
+        * **time**
+            (`[float, float]`) The start_time and end_time for the query (in seconds since the epoch)
+        * **where**
+            (`string`) A where clause for the query
+
+    :return:
+        A JSON response, with slightly different syntax depending on the information requested with the keyword
+        arguments. Example responses can be seen at http://resources.arcgis.com/en/help/rest/apiref/fsquery.html
+    """
+
     query_limit_default = QUERY_LIMIT
 
     def handle_request(self, request, **kwargs):
@@ -425,7 +592,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         r.related_title: {
             'source': r.source_column,
             'target': r.target_column,
-            'fields': {f['name'] for f in r.fields if f['aliased'] in query_fields}
+            'fields': {f['name'] for f in r.fields if f['qualified'] in query_fields}
         } for r in for_layer.relations
     }
     joined_tables = {k: v for k, v in joined_tables.items() if v['fields']}

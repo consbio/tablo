@@ -215,7 +215,7 @@ class FeatureServiceLayer(models.Model):
 
             self._related_fields = OrderedDict()
             for field in (f for r in self.relations for f in r.fields):
-                field_key = field['aliased']  # Will be related_title.field
+                field_key = field['qualified']  # Will be related_title.field
                 self.related_fields[field_key] = field
 
         return self._related_fields
@@ -796,7 +796,9 @@ class FeatureServiceLayerRelations(models.Model):
 
             fields = get_fields(self.table)
             for field in fields:
-                field['aliased'] = '{0}.{1}'.format(self.related_title, field['name'])
+                field['qualified'] = '{0}.{1}'.format(self.related_title, field['name'])
+                if field['name'] == self.source_column:
+                    field['relatesTo'] = self.target_column
             self._fields = fields
 
         return self._fields
