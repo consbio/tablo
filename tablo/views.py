@@ -62,6 +62,25 @@ class TemporaryFileUploadFormView(FormMixin, TemporaryFileUploadViewBase, Proces
 class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
     @csrf_exempt
     def dispatch(self, request, *args, **kwargs):
+        """
+        Uploads a CSV file, based on URL and stores it under a UUID, allowing it to be referenced later. Send a POST
+        message to {tablo-server}/tablo/admin/upload-by-url, with a parameter of **url** specifying where your file
+        resides.
+
+        :Keyword Arguments:
+            * **url**
+                The URL of the file you wish to upload-by-url
+
+        :return:
+            A JSON object in the following format:
+
+            .. code-block:: json
+
+                {
+                    'uuid': {unique identifier for the file}
+                }
+
+        """
         try:
             return super(TemporaryFileUploadUrlView, self).dispatch(request, *args, **kwargs)
         except URLError as e:
