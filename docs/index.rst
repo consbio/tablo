@@ -7,7 +7,7 @@ Tablo is a lightweight Django application that creates a interface layer for int
 within a PostGIS database.
 
 .. toctree::
-   :maxdepth: 3 
+   :maxdepth: 3
 
    readme_link
    install
