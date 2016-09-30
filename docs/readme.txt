@@ -1,5 +1,5 @@
 This is the documentation folder for Tablo. In order to manually build the documentation, you will need to
-pip install the following libraries (this are not included as dependencies since they are only required for
+pip install the following libraries (these are not included as dependencies, since they are only required for
 building the documentation):
 
 sphinx
