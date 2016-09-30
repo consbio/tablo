@@ -1,4 +1,4 @@
-Getting Started
+Installing
 ===================
 
 To keep things separate, you will most likely want to work within a python virtual environment. This just makes

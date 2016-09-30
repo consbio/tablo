@@ -293,6 +293,45 @@ class TemporaryFileResource(ModelResource):
         ]
 
     def describe(self, request, **kwargs):
+        """
+        Describe, located at the ``{tablo-server}/api/v1/temporary-files/{uuid}/describe`` endpoint, will describe
+        the uploaded CSV file. This allows you to know the column names and data types that were found within the
+        file.
+
+        :return:
+            A JSON object in the following format:
+
+            .. code-block:: json
+
+                {
+                    "fieldNames": ["field one", "field two", "latitude", "longitude"],
+                    "dataTypes": ["STRING", "INTEGER", "DOUBLE", "DOUBLE"],
+                    "optionalFields": ["field one"],
+                    "xColumn": "longitude",
+                    "yColumn": "latitude",
+                    "filename": "uploaded.csv"
+                }
+
+            **fieldNames**
+                A list of field (column) names within the CSV
+
+            **dataTypes**
+                A list of data types for each of the columns. The index of this list will match the index of the
+                fieldNames list.
+
+            **optionalFields**
+                A list of fields that had empty values, and are taken to be optional.
+
+            **xColumn**
+                The best guess at which column contains X spatial coordinates.
+
+            **yColumn**
+                The best guess at which column contains Y spatial coordinates.
+
+            **filename**
+                The name of the file being described
+
+        """
         self.is_authenticated(request)
 
         bundle = self.build_bundle(request=request)

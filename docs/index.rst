@@ -1,7 +1,4 @@
-.. Tablo documentation master file, created by
-   sphinx-quickstart on Thu Sep  8 15:33:55 2016.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+.. Tablo documentation master file
 
 Tablo
 =====
@@ -9,11 +6,10 @@ Tablo
 Tablo is a lightweight Django application that creates a interface layer for interacting with spatial data stored
 within a PostGIS database.
 
-.. automodule:: tablo
-
 .. toctree::
-   :maxdepth: 2
-   
+   :maxdepth: 3
+
+   readme_link
    install
-   interfaces/index
    upload/index
+   interfaces/index
