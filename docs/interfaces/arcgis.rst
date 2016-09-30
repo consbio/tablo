@@ -5,7 +5,7 @@ ArcGIS Interface
 
 Query
 ------------
-.. autoclass:: tablo.interfaces.arcgis.views.QueryView
+.. autoclass:: tablo.interfaces.arcgis.views.QueryView 
 
 TimeQuery
 ------------
