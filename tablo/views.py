@@ -64,11 +64,11 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
     def dispatch(self, request, *args, **kwargs):
         """
         Uploads a CSV file, based on URL and stores it under a UUID, allowing it to be referenced later. Send a POST
-        message to {tablo-server}/tablo/admin/upload-by-url, with a parameter of **url** specifying where your file
+        message to ``{tablo-server}/tablo/admin/upload-by-url``, with a parameter of **url** specifying where your file
         resides.
 
         :Keyword Arguments:
-            * **url**
+            **url**
                 The URL of the file you wish to upload-by-url
 
         :return:
@@ -77,7 +77,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
             .. code-block:: json
 
                 {
-                    'uuid': {unique identifier for the file}
+                    "uuid": "uniqueIdentifierForTheFile"
                 }
 
         """

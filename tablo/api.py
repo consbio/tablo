@@ -28,6 +28,56 @@ TYPE_REGEX = re.compile(r'\([^\)]*\)')
 
 
 class FeatureServiceResource(ModelResource):
+    """
+    The FeatureService resource, located at ``{tablo_server}/api/v1/featureservice``, allows you to create, edit
+    and delete feature services within Tablo.
+
+    Once your data has been deployed through the deploy endpoint, you can create a feature service by sending a POST
+    message to the above endpoint with data structured as:
+
+    .. code-block:: json
+
+        {
+            "description": "",
+            "copyright_text": "",
+            "spatial_reference": "{'wkid': 3857}",
+            "units": "esriMeters",
+            "allow_geometry_updates": false,
+            "layers": [
+                {
+                    "layer_order": 0,
+                    "table": "db_dataset_id_import",
+                    "name": "layername",
+                    "description": null,
+                    "geometry_type": "esriGeometryPoint",
+                    "supports_time": false,
+                    "start_time_field": null,
+                    "time_interval": 0,
+                    "time_interval_units": null,
+                    "drawing_info": {
+                        "renderer": {
+                            "description": "",
+                            "label": "",
+                            "symbol": {
+                                "angle": 0,
+                                "color": [255, 0, 0, 255],
+                                "size": 5,
+                                "style": "esriSMSCircle",
+                                "type": "esriSMS",
+                                "xoffset": 0,
+                                "yoffset": 0
+                            },
+                            "type": "simple"
+                        }
+                    }
+                }
+            ]
+        }
+
+    The creation will return a URL that will contain the Service ID of your newly created feature service.
+
+
+    """
 
     layers = fields.ToManyField('tablo.api.FeatureServiceLayerResource', attribute='featureservicelayer_set',
         full=True, full_list=False, related_name='service')
@@ -67,6 +117,12 @@ class FeatureServiceResource(ModelResource):
         ]
 
     def finalize(self, request, **kwargs):
+        """
+        The finalize endpoint, located at ``{tablo_host}/api/v1/featureservice/{service_id}/finalize`` allows you to
+        finalize the feature service and mark it as available for use. This endpoint moves the data from the temporary
+        database table and into its permanent one. This endpoint whould be accessed with a **service_id** parameter
+        specifying the Service ID of the service you want to finalize.
+        """
         try:
             service = FeatureService.objects.get(id=kwargs['service_id'])
         except ObjectDoesNotExist:
@@ -359,6 +415,37 @@ class TemporaryFileResource(ModelResource):
         return self.create_response(request, bundle)
 
     def deploy(self, request, **kwargs):
+        """
+            The deploy endpoint, at ``{tablo_server}/api/v1/temporary-files/{uuid}/{dataset_id}/deploy/`` deploys
+            the file specified by {uuid} into a database table named after the {dataset_id}. The {dataset_id} must
+            be unique for the instance of Tablo.
+
+            With the deploy endpoint, this is the start of what Tablo considers an import. The data will be
+            temporarily stored in an import table until the finalize endpoint for the dataset_id is called.
+
+            POST messages to the deploy endpoint should include the following data:
+
+            **csv_info**
+                Information about the CSV file. This is generally that information obtained through the
+                describe endpoint, but can be modified to send additional information or modify it.
+            **fields**
+                A list of field JSON objects in the following format:
+
+                .. code-block:: json
+
+                    {
+                        "name": "field_name",
+                        "type": "text",
+                        "value": "optional value",
+                        "required": true
+                    }
+
+                The value can be specified if the field is a constant value throughout the table. This can
+                be use for adding audit information.
+
+            :return:
+                An empty HTTP 200 response if the deploy was successful. An error response if otherwise.
+        """
         self.is_authenticated(request)
 
         try:
