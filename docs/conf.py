@@ -25,7 +25,7 @@ import django
 sys.path.insert(0, os.path.abspath('../'))
 
 # -- Allow read the docs to load the django files
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tablo.tests.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "docs.settings")
 django.setup()
 
 # -- General configuration ------------------------------------------------
