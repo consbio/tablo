@@ -44,7 +44,7 @@ This allows us to take a CSV file like this:
 
 And turn it into a map like this:
 
-    .. image:: https://github.com/consbio/tablo/blob/master/docs/_static/images/tablo-data-model.png
+    .. image:: https://github.com/consbio/tablo/blob/master/docs/_static/images/sample_map.png
 
 
 Notes
