@@ -44,16 +44,13 @@ This allows us to take a CSV file like this:
 
 And turn it into a map like this:
 
-    .. figure:: _static/images/sample_map.png
+    .. image:: https://github.com/consbio/tablo/blob/master/docs/_static/images/tablo-data-model.png
 
 
 Notes
 -----
 
 Currently, Tablo only supports point geometry data. We hope to add other types of geometry in the near future.
-
-Tablo, out of the box, does not offer authentication. It can be added in the form of API key authentication as
-described in the :ref:`Add API Key Authentication <api_key>` install section.
 
 
 Documentation
