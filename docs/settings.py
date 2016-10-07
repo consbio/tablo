@@ -23,6 +23,7 @@ INSTALLED_APPS = (
     'django_nose',
     'tastypie',
     'tablo',
+    'django_extensions'
 )
 
 TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
