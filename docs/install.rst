@@ -94,6 +94,9 @@ In tablo_project/tablo_project/urls.py, make sure that the tablo.urls are includ
         url(r'^admin/', include(admin.site.urls)),
     ]
 
+
+.. _api_key:
+
 Add API Key Authentication
 --------------------------
 

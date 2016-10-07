@@ -11,5 +11,6 @@ within a PostGIS database.
 
    readme_link
    install
+   data_model
    upload/index
    interfaces/index
