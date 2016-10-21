@@ -1102,7 +1102,7 @@ def determine_extent(table):
                 extent = ADJUSTED_GLOBAL_EXTENT
 
     except DatabaseError:
-        logger.excdeption('Error generating extent for table {0}, returning adjusted global extent'.format(table))
+        logger.exception('Error generating extent for table {0}, returning adjusted global extent'.format(table))
         # Default to adjusted global extent if there is an error, similar to the one we present on the map page
         extent = ADJUSTED_GLOBAL_EXTENT
 

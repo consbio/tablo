@@ -16,7 +16,7 @@ urlpatterns = patterns('')
 
 urlpatterns = patterns('',
     url(r'^api/', include(api.urls)),
-    url(r'^tablo/arcgis', include(arcgis_urls)),
+    url(r'^tablo/arcgis/', include(arcgis_urls)),
     url(r'^tablo/admin/upload-by-url/$', TemporaryFileUploadUrlView.as_view(), name='tablo_admin_upload_by_url'),
     url(r'^tablo/admin/upload/$', TemporaryFileUploadFormView.as_view(), name='tablo_admin_upload'),
     #url(r'^tablo/admin/describe/(?P<uuid>[0-9\w\-]+)/$', TemporaryFileDownloadView.as_view(), name='tablo_admin_describe'),
