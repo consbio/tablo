@@ -3,8 +3,8 @@ TEMPLATE_DEBUG = DEBUG
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': 'test.db',
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'tablo_test',
     }
 }
 USE_TZ = False
