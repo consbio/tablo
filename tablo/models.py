@@ -14,7 +14,7 @@ from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
-from tablo.geom_utils import Extent, SpatialReference
+from tablo.geom_utils import Extent, SpatialReference, esri_feature_to_ewkt
 from tablo.utils import get_jenks_breaks, dictfetchall
 
 
@@ -38,7 +38,7 @@ POSTGIS_ESRI_FIELD_MAPPING = {
 IMPORT_SUFFIX = '_import'
 TABLE_NAME_PREFIX = 'db_'
 PRIMARY_KEY_NAME = 'db_id'
-POINT_FIELD_NAME = 'dbasin_geom'
+GEOM_FIELD_NAME = 'dbasin_geom'
 SOURCE_DATASET_FIELD_NAME = 'source_dataset'
 WEB_MERCATOR_SRID = 3857
 
@@ -167,6 +167,10 @@ class FeatureServiceLayer(models.Model):
         return self._extent
 
     @property
+    def srid(self):
+        return json.loads(self.service.spatial_reference)['wkid']
+
+    @property
     def time_extent(self):
         if not self.supports_time:
             return '[]'
@@ -197,7 +201,7 @@ class FeatureServiceLayer(models.Model):
             for field in fields:
                 if field['name'] == 'db_id':
                     field['type'] = 'esriFieldTypeOID'
-                elif field['name'] == POINT_FIELD_NAME:
+                elif field['name'] == GEOM_FIELD_NAME:
                     field['type'] = 'esriFieldTypeGeometry'
             self._fields = fields
 
@@ -518,7 +522,7 @@ class FeatureServiceLayer(models.Model):
 
     def get_distinct_geometries_across_time(self, *kwargs):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'
-        time_query = time_query.format(geom_field=POINT_FIELD_NAME, table=self.table)
+        time_query = time_query.format(geom_field=GEOM_FIELD_NAME, table=self.table)
 
         with get_cursor() as c:
             c.execute(time_query)
@@ -654,7 +658,7 @@ class FeatureServiceLayer(models.Model):
 
     def add_feature(self, feature):
 
-        system_cols = {PRIMARY_KEY_NAME, POINT_FIELD_NAME}
+        system_cols = {PRIMARY_KEY_NAME, GEOM_FIELD_NAME}
         with get_cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
@@ -682,13 +686,13 @@ class FeatureServiceLayer(models.Model):
             placeholders=','.join(['%s'] * len(colnames_in_table)),
             primary_key=PRIMARY_KEY_NAME
         )
-        set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), {web_srid}),{web_srid}) WHERE {primary_key}=%s'.format(
+
+        set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
             dataset_table_name=self.table,
-            point_column=POINT_FIELD_NAME,
-            long=feature['geometry']['x'],
-            lat=feature['geometry']['y'],
-            primary_key=PRIMARY_KEY_NAME,
-            web_srid=WEB_MERCATOR_SRID
+            geom_column=GEOM_FIELD_NAME,
+            geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
+            table_srid=self.srid,
+            primary_key=PRIMARY_KEY_NAME
         )
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
@@ -705,7 +709,7 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
-            c.execute(set_point_command, [primary_key])
+            c.execute(set_geom_command, [primary_key])
 
         return primary_key
 
@@ -730,7 +734,7 @@ class FeatureServiceLayer(models.Model):
                 continue
             if key not in colnames_in_table:
                 raise AttributeError('attributes do not match')
-            if key != POINT_FIELD_NAME:
+            if key != GEOM_FIELD_NAME:
                 argument_updates.append('{0} = %s'.format(key))
                 if key in date_fields and feature['attributes'][key]:
                     if isinstance(feature['attributes'][key], str):
@@ -740,14 +744,13 @@ class FeatureServiceLayer(models.Model):
                 else:
                     argument_values.append(feature['attributes'][key])
 
-        if feature['geometry']:
-            set_point_command = 'UPDATE {dataset_table_name} SET {point_column} = ST_Transform(ST_SetSRID(ST_MakePoint({long}, {lat}), 3857),{web_srid}) WHERE {primary_key}=%s'.format(
+        if feature.get('geometry'):
+            set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
                 dataset_table_name=self.table,
-                point_column=POINT_FIELD_NAME,
-                long=feature['geometry']['x'],
-                lat=feature['geometry']['y'],
-                primary_key=PRIMARY_KEY_NAME,
-                web_srid=WEB_MERCATOR_SRID
+                geom_column=GEOM_FIELD_NAME,
+                geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
+                table_srid=self.srid,
+                primary_key=PRIMARY_KEY_NAME
             )
 
         argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
@@ -763,7 +766,8 @@ class FeatureServiceLayer(models.Model):
 
         with get_cursor() as c:
             c.execute(update_command, argument_values)
-            c.execute(set_point_command, [primary_key])
+            if feature.get('geometry'):
+                c.execute(set_geom_command, [primary_key])
 
         return primary_key
 
@@ -872,7 +876,7 @@ def copy_data_table_for_import(dataset_id):
 
     index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
         table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
-        column_name=POINT_FIELD_NAME
+        column_name=GEOM_FIELD_NAME
     )
 
     with get_cursor() as c:
@@ -957,7 +961,7 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             source_dataset=SOURCE_DATASET_FIELD_NAME,
             dataset_id="'{0}'".format(dataset_id),
             dataset_table_name=TABLE_NAME_PREFIX + dataset_id,
-            spatial_field=POINT_FIELD_NAME
+            spatial_field=GEOM_FIELD_NAME
         )
         logger.debug(insert_command)
         all_commands.append(insert_command)
@@ -1033,22 +1037,22 @@ def add_or_update_database_fields(table_name, fields):
                 c.execute(command)
 
 
-def add_point_column(dataset_id, is_import=True):
+def add_geometry_column(dataset_id, is_import=True):
 
     with get_cursor() as c:
         add_command = "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})".format(
             schema='public',
             table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=POINT_FIELD_NAME,
+            column_name=GEOM_FIELD_NAME,
             srid=WEB_MERCATOR_SRID,
-            type='POINT',
+            type='GEOMETRY',
             dimension=2
         )
         c.execute(add_command)
 
         index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
             table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=POINT_FIELD_NAME
+            column_name=GEOM_FIELD_NAME
         )
         c.execute(index_command)
 
@@ -1071,13 +1075,13 @@ def populate_point_data(pk, csv_info, is_import=True):
 
     update_command = 'UPDATE {table_name} SET {field_name} = {make_point_command}'.format(
         table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
-        field_name=POINT_FIELD_NAME,
+        field_name=GEOM_FIELD_NAME,
         make_point_command=make_point_command
     )
 
     clear_null_command = 'DELETE FROM {table_name} WHERE {field_name} IS NULL'.format(
         table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
-        field_name=POINT_FIELD_NAME,
+        field_name=GEOM_FIELD_NAME,
     )
 
     with get_cursor() as c:
@@ -1089,7 +1093,7 @@ def determine_extent(table):
 
     try:
         query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
-            field_name=POINT_FIELD_NAME,
+            field_name=GEOM_FIELD_NAME,
             table_name=table
         )
 
