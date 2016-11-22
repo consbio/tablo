@@ -21,23 +21,6 @@ forward_sql = """
     LANGUAGE plpgsql;
     """.format(geom_col=GEOM_FIELD_NAME, srid=WEB_MERCATOR_SRID)
 
-# FIXME In case of reverse, shall we drop non-point datasets and their relevant featureservice(layers)?
-reverse_sql = """
-    DO
-    $$
-    DECLARE
-        table_name name;
-    BEGIN
-        FOR table_name IN
-            SELECT tablo_featureservicelayer.table FROM tablo_featureservicelayer WHERE geometry_type = 'esriGeometryPoint'
-        LOOP
-            EXECUTE format('ALTER TABLE %I ALTER COLUMN {geom_col} TYPE geometry(''POINT'', {srid});', table_name);
-        END LOOP;
-    END;
-    $$
-    LANGUAGE plpgsql;
-""".format(geom_col=GEOM_FIELD_NAME, srid=WEB_MERCATOR_SRID)
-
 
 class Migration(migrations.Migration):
     dependencies = [
@@ -45,5 +28,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunSQL(forward_sql, reverse_sql)
+        migrations.RunSQL(forward_sql)
     ]

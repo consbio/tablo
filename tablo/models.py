@@ -158,6 +158,7 @@ class FeatureServiceLayer(models.Model):
     _fields = None
     _related_fields = None
     _relations = None
+    _srid = None
 
     @property
     def extent(self):
@@ -168,7 +169,9 @@ class FeatureServiceLayer(models.Model):
 
     @property
     def srid(self):
-        return json.loads(self.service.spatial_reference)['wkid']
+        if not self._srid:
+            self._srid = json.loads(self.service.spatial_reference)['wkid']
+        return self._srid
 
     @property
     def time_extent(self):
@@ -744,15 +747,6 @@ class FeatureServiceLayer(models.Model):
                 else:
                     argument_values.append(feature['attributes'][key])
 
-        if feature.get('geometry'):
-            set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
-                dataset_table_name=self.table,
-                geom_column=GEOM_FIELD_NAME,
-                geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
-                table_srid=self.srid,
-                primary_key=PRIMARY_KEY_NAME
-            )
-
         argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
         update_command = (
             'UPDATE {dataset_table_name}'
@@ -767,6 +761,13 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(update_command, argument_values)
             if feature.get('geometry'):
+                set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
+                    dataset_table_name=self.table,
+                    geom_column=GEOM_FIELD_NAME,
+                    geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
+                    table_srid=self.srid,
+                    primary_key=PRIMARY_KEY_NAME
+                )
                 c.execute(set_geom_command, [primary_key])
 
         return primary_key

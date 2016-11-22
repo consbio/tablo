@@ -6,11 +6,12 @@ from pyproj import Proj, transform
 from math import sqrt, fabs, cos, radians
 from itertools import product
 
+from tablo import wkt
+
 GLOBAL_EXTENT_WEB_MERCATOR = (-20037508.342789244, -20037342.166152496, 20037508.342789244, 20037342.16615247)
 SQL_BOX_REGEX = re.compile('BOX\((.*) (.*),(.*) (.*)\)')
-WKT_POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
-WKT_GEOM_2D_REGEX = re.compile('((?:-?\d+(?:.\d+)?) (?:-?\d+(?:.\d+)?))')
-ESRI_GEOM_2D_REGEX = re.compile('(\[)(?:-?\d+(?:.\d+)?)(, ?)(?:-?\d+(?:.\d+)?)(\])')
+WKT_GEOM_REGEX = re.compile('((?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?) (?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?))')
+ESRI_GEOM_REGEX = re.compile('(\[)(?:-?\d+(?:.\d+)?)(, ?)(?:-?\d+(?:.\d+)?)(\])')
 
 
 class SpatialReference(object):
@@ -445,188 +446,43 @@ def wkt_to_esri_feature(wkt):
 
     def _geom_repl():
         bracket_multiplier = 1
-        if geom_type.find('LINESTRING') > -1:
+        if 'LINESTRING' in geom_type:
             bracket_multiplier = 2
-        return json.loads(re.sub(
-            WKT_GEOM_2D_REGEX,
+        return json.loads(WKT_GEOM_REGEX.sub(
             lambda m: '[{}]'.format(m.group().replace(' ', ',')),
             wkt.replace(geom_type, '')
         ).replace('(', '[' * bracket_multiplier).replace(')', ']' * bracket_multiplier))
 
     if geom_type == 'POINT' or geom_type == 'MULTIPOINT':
-        match = WKT_POINT_REGEX.match(wkt)
-        if not match:
+        match = WKT_GEOM_REGEX.findall(wkt)
+        if len(match) != 1:
             raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
-        x, y = (float(x) for x in match.groups())
+        try:
+            x, y = map(float, match[0].split())
+        except ValueError:
+            raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
         return {'x': x, 'y': y}
-    elif geom_type == 'LINESTRING' or geom_type == 'MULTILINESTRING':
-        return {'paths': _geom_repl(wkt, geom_type)}
+    elif geom_type in ['LINESTRING', 'MULTILINESTRING']:
+        return {'paths': _geom_repl()}
     elif geom_type == 'POLYGON' or geom_type == 'MULTIPOLYGON':
-        return {'rings': _geom_repl(wkt, geom_type)}
+        return {'rings': _geom_repl()}
 
 
 def esri_feature_to_ewkt(feature, geom_type):
-    srid = 'srid={};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
+
+    def _get_paths_text(paths_text):
+        return ESRI_GEOM_REGEX.sub(
+            lambda m: m.group().replace('[', '').replace(']', '').replace(',', ' '),
+            paths_text
+        ).replace('[', '(').replace(']', ')')
+
+    srid = 'srid={0};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
     if geom_type == 'esriGeometryPoint':
         return '{srid}POINT({x} {y})'.format(srid=srid, x=feature['x'], y=feature['y'])
     elif geom_type == 'esriGeometryPolyline':
         paths_text = json.dumps(feature['paths'])
-        lines = re.sub(
-            ESRI_GEOM_2D_REGEX,
-            lambda m: m.group().replace('[', '').replace(']', '').replace(',', ' '),
-            paths_text
-        ).replace('[', '(').replace(']', ')')
-        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=lines)
+        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=_get_paths_text(paths_text))
     elif geom_type == 'esriGeometryPolygon':
-        rings_text = json.dumps(Terraformer.rings_to_wkt(feature['rings'])['coordinates'])
-        polygons = re.sub(
-            ESRI_GEOM_2D_REGEX,
-            lambda m: m.group().replace('[', '').replace(']', '').replace(',', ' '),
-            rings_text
-        ).replace('[', '(').replace(']', ')')
-        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=polygons)
+        rings_text = json.dumps(wkt.from_rings(feature['rings'])['coordinates'])
+        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=_get_paths_text(rings_text))
     raise ValueError('Unsupported geometry type')
-
-
-class Terraformer:
-    # This class is a translation of ESRI Terraformer library from JS and contains the utils for converting
-    # ESRI geometry JSON to GeoJSON
-    # TODO look for optimization possibilities
-
-    @staticmethod
-    def rings_to_wkt(rings):
-        outer_rings = []
-        holes = []
-
-        for r in rings:
-            ring = Terraformer.close_ring(r)
-            if len(ring) < 4:
-                continue
-
-            if Terraformer.ring_is_clockwise(ring):
-                # a clockwise ring means its an outer ring
-                polygon = [ring]
-                outer_rings.append(polygon)
-            else:
-                # otherwise it's a hole!
-                holes.append(ring)
-
-        uncontained_holes = []
-
-        while holes:
-            hole = holes.pop()
-
-            # loop over all outer rings and see if they contain our hole.
-            contained = False
-            for r in reversed(outer_rings):     # TODO why esri loops over a reversed rings?
-                outer_ring = r[0]
-                if Terraformer.coordinates_contain_coordinates(outer_ring, hole):
-                    r.append(hole)
-                    contained = True
-                    break
-
-            # sometimes a ring may not be contained in any outer ring (https://github.com/Esri/esri-leaflet/issues/320)
-            if not contained:
-                uncontained_holes.append(hole)
-
-        # check and see if uncontained holes intersect with any outer rings
-        while uncontained_holes:
-            hole = uncontained_holes.pop()
-
-            intersects = False
-            for r in reversed(outer_rings):     # TODO why esri loops over a reversed rings?
-                outer_ring = r[0]
-                if Terraformer.arrays_intersect_arrays(outer_ring, hole):
-                    outer_rings[r].push(hole)
-                    intersects = True
-                    break
-
-            # hole does not intersect ANY outer ring at this point; make it an outer ring.
-            if not intersects:
-                hole.reverse()
-                outer_rings.append([hole])
-
-        return {
-            'type': 'MultiPolygon',
-            'coordinates': outer_rings
-        }
-
-    @staticmethod
-    def close_ring(coordinates):
-        # makes sure the ring is closed
-        if coordinates[0] != coordinates[-1]:
-            coordinates.push(coordinates[0])
-
-        return coordinates
-
-    @staticmethod
-    def ring_is_clockwise(ring_to_test):
-        # a positive sum of areas under each side of a polygon indicates a clockwise polygon
-        # http://stackoverflow.com/questions/1165647/how-to-determine-if-a-list-of-polygon-points-are-in-clockwise-order
-        total = 0
-        r_length = len(ring_to_test)
-        for idx, pt1 in enumerate(ring_to_test):
-            if idx + 1 != r_length:
-                pt2 = ring_to_test[idx + 1]
-                total += (pt2[0] - pt1[0]) * (pt2[1] + pt1[1])
-        return total >= 0
-
-    @staticmethod
-    def edge_intersects_edge(a1, a2, b1, b2):
-        ua_t = (b2[0] - b1[0]) * (a1[1] - b1[1]) - (b2[1] - b1[1]) * (a1[0] - b1[0])
-        ub_t = (a2[0] - a1[0]) * (a1[1] - b1[1]) - (a2[1] - a1[1]) * (a1[0] - b1[0])
-        u_b = (b2[1] - b1[1]) * (a2[0] - a1[0]) - (b2[0] - b1[0]) * (a2[1] - a1[1])
-
-        if u_b != 0:
-            ua = ua_t / u_b
-            ub = ub_t / u_b
-
-            if 0 <= ua <= 1 and 0 <= ub <= 1:
-                return True
-
-        return False
-
-    @staticmethod
-    def arrays_intersect_arrays(a, b):
-        try:
-            # test for numbers
-            int(a[0][0])
-            try:
-                int(b[0][0])
-                for i, _ in enumerate(a[:-1]):
-                    for j, __ in enumerate(b[:-1]):
-                        if Terraformer.edge_intersects_edge(a[i], a[i + 1], b[j], b[j + 1]):
-                            return True
-            except TypeError:
-                for k in b:
-                    if Terraformer.arrays_intersect_arrays(a, k):
-                        return True
-        except TypeError:
-            for l in a:
-                if Terraformer.arrays_intersect_arrays(l, b):
-                    return True
-        return False
-
-    @staticmethod
-    def coordinates_contain_point(coordinates, point):
-        contains = False
-        i = 0
-        l = len(coordinates)
-        j = l - 1
-        while i < l:
-            if (((coordinates[i][1] <= point[1] < coordinates[j][1]) or (
-                            coordinates[j][1] <= point[1] < coordinates[i][1])) and (
-                        point[0] < (coordinates[j][0] - coordinates[i][0]) * (point[1] - coordinates[i][1]) / (
-                                coordinates[j][1] - coordinates[i][1]) + coordinates[i][0])):
-                contains = not contains
-            j = i
-            i += 1
-        return contains
-
-    @staticmethod
-    def coordinates_contain_coordinates(outer, inner):
-        intersects = Terraformer.arrays_intersect_arrays(outer, inner)
-        contains = Terraformer.coordinates_contain_point(outer, inner[0])
-        if not intersects and contains:
-            return True
-        return False
