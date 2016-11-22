@@ -31,7 +31,8 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, View
 
-from tablo.geom_utils import Extent, wkt_to_esri_feature
+from tablo import wkt
+from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
 QUERY_LIMIT = 10000
@@ -609,7 +610,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         feature = {'attributes': item}
 
         if has_geometry:
-            feature['geometry'] = wkt_to_esri_feature(item.pop('st_astext'))
+            feature['geometry'] = wkt.to_esri_feature(item.pop('st_astext'))
 
         # Loop over queried fields and append under respective related titles
 

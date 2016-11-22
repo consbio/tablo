@@ -1,6 +1,58 @@
 # All the functions here are translations of ESRI Terraformer library from JS and are used for converting
 # ESRI geometry JSON to GeoJSON
 # TODO look for optimization possibilities
+import json
+import re
+
+WKT_GEOM_REGEX = re.compile('((?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?) (?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?))')
+ESRI_GEOM_REGEX = re.compile('(\[)(?:-?\d+(?:.\d+)?)(, ?)(?:-?\d+(?:.\d+)?)(\])')
+
+
+def to_esri_feature(wkt):
+    geom_type = wkt[:wkt.find('(')]
+
+    def _geom_repl():
+        bracket_multiplier = 1
+        if 'LINESTRING' in geom_type:
+            bracket_multiplier = 2
+        return json.loads(WKT_GEOM_REGEX.sub(
+            lambda m: '[{}]'.format(m.group().replace(' ', ',')),
+            wkt.replace(geom_type, '')
+        ).replace('(', '[' * bracket_multiplier).replace(')', ']' * bracket_multiplier))
+
+    if geom_type == 'POINT' or geom_type == 'MULTIPOINT':
+        match = WKT_GEOM_REGEX.findall(wkt)
+        if len(match) != 1:
+            raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
+        try:
+            x, y = map(float, match[0].split())
+        except ValueError:
+            raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
+        return {'x': x, 'y': y}
+    elif geom_type in ['LINESTRING', 'MULTILINESTRING']:
+        return {'paths': _geom_repl()}
+    elif geom_type == 'POLYGON' or geom_type == 'MULTIPOLYGON':
+        return {'rings': _geom_repl()}
+
+
+def from_esri_feature(feature, geom_type):
+
+    def _get_geom_text(geom_text):
+        return ESRI_GEOM_REGEX.sub(
+            lambda m: m.group().replace('[', '').replace(']', '').replace(',', ' '),
+            geom_text
+        ).replace('[', '(').replace(']', ')')
+
+    srid = 'srid={0};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
+    if geom_type == 'esriGeometryPoint':
+        return '{srid}POINT({x} {y})'.format(srid=srid, x=feature['x'], y=feature['y'])
+    elif geom_type == 'esriGeometryPolyline':
+        paths_text = json.dumps(feature['paths'])
+        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=_get_geom_text(paths_text))
+    elif geom_type == 'esriGeometryPolygon':
+        rings_text = json.dumps(from_rings(feature['rings'])['coordinates'])
+        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=_get_geom_text(rings_text))
+    raise ValueError('Unsupported geometry type')
 
 
 def from_rings(rings):

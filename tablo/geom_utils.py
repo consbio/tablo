@@ -6,12 +6,8 @@ from pyproj import Proj, transform
 from math import sqrt, fabs, cos, radians
 from itertools import product
 
-from tablo import wkt
-
 GLOBAL_EXTENT_WEB_MERCATOR = (-20037508.342789244, -20037342.166152496, 20037508.342789244, 20037342.16615247)
 SQL_BOX_REGEX = re.compile('BOX\((.*) (.*),(.*) (.*)\)')
-WKT_GEOM_REGEX = re.compile('((?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?) (?:-?\d+(?:.\d+(?:[eE][-+]?\d+)?)?))')
-ESRI_GEOM_REGEX = re.compile('(\[)(?:-?\d+(?:.\d+)?)(, ?)(?:-?\d+(?:.\d+)?)(\])')
 
 
 class SpatialReference(object):
@@ -439,50 +435,3 @@ def extract_significant_digits(number):
         rounded = 0 - rounded
 
     return rounded
-
-
-def wkt_to_esri_feature(wkt):
-    geom_type = wkt[:wkt.find('(')]
-
-    def _geom_repl():
-        bracket_multiplier = 1
-        if 'LINESTRING' in geom_type:
-            bracket_multiplier = 2
-        return json.loads(WKT_GEOM_REGEX.sub(
-            lambda m: '[{}]'.format(m.group().replace(' ', ',')),
-            wkt.replace(geom_type, '')
-        ).replace('(', '[' * bracket_multiplier).replace(')', ']' * bracket_multiplier))
-
-    if geom_type == 'POINT' or geom_type == 'MULTIPOINT':
-        match = WKT_GEOM_REGEX.findall(wkt)
-        if len(match) != 1:
-            raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
-        try:
-            x, y = map(float, match[0].split())
-        except ValueError:
-            raise ValueError('Invalid Point Geometry: {0}'.format(wkt))
-        return {'x': x, 'y': y}
-    elif geom_type in ['LINESTRING', 'MULTILINESTRING']:
-        return {'paths': _geom_repl()}
-    elif geom_type == 'POLYGON' or geom_type == 'MULTIPOLYGON':
-        return {'rings': _geom_repl()}
-
-
-def esri_feature_to_ewkt(feature, geom_type):
-
-    def _get_paths_text(paths_text):
-        return ESRI_GEOM_REGEX.sub(
-            lambda m: m.group().replace('[', '').replace(']', '').replace(',', ' '),
-            paths_text
-        ).replace('[', '(').replace(']', ')')
-
-    srid = 'srid={0};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
-    if geom_type == 'esriGeometryPoint':
-        return '{srid}POINT({x} {y})'.format(srid=srid, x=feature['x'], y=feature['y'])
-    elif geom_type == 'esriGeometryPolyline':
-        paths_text = json.dumps(feature['paths'])
-        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=_get_paths_text(paths_text))
-    elif geom_type == 'esriGeometryPolygon':
-        rings_text = json.dumps(wkt.from_rings(feature['rings'])['coordinates'])
-        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=_get_paths_text(rings_text))
-    raise ValueError('Unsupported geometry type')

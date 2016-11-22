@@ -13,8 +13,9 @@ from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
+from tablo import wkt
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
-from tablo.geom_utils import Extent, SpatialReference, esri_feature_to_ewkt
+from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
 
 
@@ -693,7 +694,7 @@ class FeatureServiceLayer(models.Model):
         set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
             dataset_table_name=self.table,
             geom_column=GEOM_FIELD_NAME,
-            geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
+            geom=wkt.from_esri_feature(feature['geometry'], self.geometry_type),
             table_srid=self.srid,
             primary_key=PRIMARY_KEY_NAME
         )
@@ -764,7 +765,7 @@ class FeatureServiceLayer(models.Model):
                 set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
                     dataset_table_name=self.table,
                     geom_column=GEOM_FIELD_NAME,
-                    geom=esri_feature_to_ewkt(feature['geometry'], self.geometry_type),
+                    geom=wkt.from_esri_feature(feature['geometry'], self.geometry_type),
                     table_srid=self.srid,
                     primary_key=PRIMARY_KEY_NAME
                 )
