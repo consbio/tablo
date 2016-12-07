@@ -22,7 +22,6 @@ import io
 import json
 import logging
 import time
-import re
 
 from django.db.utils import DatabaseError
 from django.core.exceptions import ValidationError
@@ -32,10 +31,10 @@ from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, View
 
+from tablo import wkt
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 
-POINT_REGEX = re.compile('POINT\((.*) (.*)\)')
 QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
@@ -324,7 +323,7 @@ class TimeQueryView(FeatureLayerView):
         response = {
             'count': len(features),
             'fields': [{'name': 'count', 'alias': 'count', 'type': 'esriFieldTypeInteger'}],
-            'geometryType': 'esriGeometryPoint',
+            'geometryType': self.feature_service_layer.geometry_type,
             'features': features
         }
 
@@ -441,9 +440,11 @@ class QueryView(FeatureLayerView):
         elif kwargs.get('returnGeometry', 'true').lower() == 'false':
             search_params['return_geometry'] = False
 
+        query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
         try:
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
+            geom_type = self.feature_service_layer.geometry_type
         except ValidationError as ex:
             # Failed validation of provided fields and incoming SQL are handled here
             return HttpResponseBadRequest(json.dumps({'error': ex.message}))
@@ -472,7 +473,7 @@ class QueryView(FeatureLayerView):
                     writer.writeheader()
 
                 for item in query_response:
-                    if has_geometry:
+                    if has_geometry and geom_type == 'esriGeometryPoint':
                         x_loc, y_loc = str(item['st_astext']).replace('POINT(', '').replace(')', '').split(' ')
                         item['geometry_x_location'] = x_loc
                         item['geometry_y_location'] = y_loc
@@ -493,7 +494,8 @@ class QueryView(FeatureLayerView):
                 data.update({
                     'count': len(features),
                     'fields': self.feature_service_layer.fields,
-                    'geometryType': 'esriGeometryPoint',
+                    'geometryType': geom_type,
+                    'spatialReference': json.loads(self.feature_service_layer.service.spatial_reference),
                     'features': features
                 })
 
@@ -608,15 +610,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
         feature = {'attributes': item}
 
         if has_geometry:
-            # This only currently works for points
-
-            point_text = item.pop('st_astext')
-            match = POINT_REGEX.match(point_text)
-            if not match:
-                raise ValueError('Invalid Point Geometry: {0}'.format(point_text))
-
-            x, y = (float(x) for x in match.groups())
-            feature['geometry'] = {'x': x, 'y': y}
+            feature['geometry'] = wkt.to_esri_feature(item.pop('st_astext'))
 
         # Loop over queried fields and append under respective related titles
 
