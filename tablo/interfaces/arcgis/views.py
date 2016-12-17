@@ -34,6 +34,7 @@ from django.views.generic import DetailView, View
 from tablo import wkt
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
+from tablo.utils import json_date_serializer
 
 QUERY_LIMIT = 10000
 
@@ -660,12 +661,3 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 features.append(feature)  # Some related fields have not been appended
 
     return features
-
-
-def json_date_serializer(obj):
-    # Handles date serialization when part of the response object
-
-    if hasattr(obj, 'isoformat'):
-        serial = obj.isoformat()
-        return serial
-    return json.JSONEncoder.default(obj)

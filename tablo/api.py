@@ -207,12 +207,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 add_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error adding feature: ' + str(e)
+                        'description': 'Error adding feature: {}'.format(e)
                     }
                 })
 
@@ -225,12 +225,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 update_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error updating feature: ' + str(e)
+                        'description': 'Error updating feature: {}'.format(e)
                     }
                 })
 
@@ -243,12 +243,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 delete_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error deleting feature: ' + str(e)
+                        'description': 'Error deleting feature: {}'.format(e)
                     }
                 })
 
@@ -475,8 +475,8 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError:
-            logger.exception()
+        except InternalError as e:
+            logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
@@ -505,8 +505,8 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError:
-            logger.exception()
+        except InternalError as e:
+            logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
