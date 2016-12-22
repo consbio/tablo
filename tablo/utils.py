@@ -101,6 +101,15 @@ def dictfetchall(cursor):
     ]
 
 
+def json_date_serializer(obj):
+    # Handles date serialization when part of the response object
+
+    if hasattr(obj, 'isoformat'):
+        serial = obj.isoformat()
+        return serial
+    return json.JSONEncoder.default(obj)
+
+
 class JSONField(CharField):
     def convert(self, value):
         if value is None:

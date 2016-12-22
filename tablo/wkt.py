@@ -43,15 +43,15 @@ def from_esri_feature(feature, geom_type):
             geom_text
         ).replace('[', '(').replace(']', ')')
 
-    srid = 'srid={0};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
+    srid = 'SRID={0};'.format(feature.get('spatialReference', {}).get('wkid', 3857))
     if geom_type == 'esriGeometryPoint':
         return '{srid}POINT({x} {y})'.format(srid=srid, x=feature['x'], y=feature['y'])
     elif geom_type == 'esriGeometryPolyline':
         paths_text = json.dumps(feature['paths'])
-        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=_get_geom_text(paths_text))
+        return '{srid}MULTILINESTRING{lines}'.format(srid=srid, lines=_get_geom_text(paths_text.replace(' ', '')))
     elif geom_type == 'esriGeometryPolygon':
         rings_text = json.dumps(from_rings(feature['rings'])['coordinates'])
-        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=_get_geom_text(rings_text))
+        return '{srid}MULTIPOLYGON{polygons}'.format(srid=srid, polygons=_get_geom_text(rings_text.replace(' ', '')))
     raise ValueError('Unsupported geometry type')
 
 
