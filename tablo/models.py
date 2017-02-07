@@ -905,7 +905,7 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
         type_conversion = {
             'decimal': 'double precision',
             'date': 'date',
-            'integer': 'integer',
+            'integer': 'bigint',
             'string': 'text',
             'xlocation': 'double precision',
             'ylocation': 'double precision',
