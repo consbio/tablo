@@ -12,10 +12,13 @@ def to_esri_feature(wkt):
     geom_type = wkt[:wkt.find('(')]
 
     def _geom_repl():
+        bracket_multiplier = 1
+        if geom_type == 'LINESTRING':
+            bracket_multiplier = 2
         return json.loads(WKT_GEOM_REGEX.sub(
             lambda m: '[{}]'.format(m.group().replace(' ', ',')),
             wkt.replace(geom_type, '')
-        ).replace('(', '[').replace(')', ']'))
+        ).replace('(', '[' * bracket_multiplier).replace(')', ']' * bracket_multiplier))
 
     if geom_type == 'POINT' or geom_type == 'MULTIPOINT':
         match = WKT_GEOM_REGEX.findall(wkt)
