@@ -47,12 +47,6 @@ And turn it into a map like this:
     .. image:: https://github.com/consbio/tablo/blob/master/docs/_static/images/sample_map.png
 
 
-Notes
------
-
-Currently, Tablo only supports point geometry data. We hope to add other types of geometry in the near future.
-
-
 Documentation
 ------------- 
 

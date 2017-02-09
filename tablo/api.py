@@ -18,7 +18,7 @@ from tastypie.utils import trailing_slash
 
 from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
-from tablo.models import add_point_column, add_or_update_database_fields
+from tablo.models import add_geometry_column, add_or_update_database_fields
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
 from tablo.models import populate_aggregate_table, populate_data, populate_point_data
 
@@ -74,6 +74,7 @@ class FeatureServiceResource(ModelResource):
             ]
         }
 
+    `drawing_info` contains ESRI styling for the FeatureService geometry type.
     The creation will return a URL that will contain the Service ID of your newly created feature service.
 
 
@@ -172,7 +173,7 @@ class FeatureServiceResource(ModelResource):
 
         dataset_list = json.loads(request.POST.get('dataset_list'))
         table_name = create_aggregate_database_table(row_columns, service.dataset_id)
-        add_point_column(service.dataset_id)
+        add_geometry_column(service.dataset_id)
         populate_aggregate_table(table_name, row_columns, dataset_list)
         service._full_extent = None
         service._initial_extent = None
@@ -206,12 +207,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 add_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error adding feature: ' + str(e)
+                        'description': 'Error adding feature: {}'.format(e)
                     }
                 })
 
@@ -224,12 +225,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 update_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error updating feature: ' + str(e)
+                        'description': 'Error updating feature: {}'.format(e)
                     }
                 })
 
@@ -242,12 +243,12 @@ class FeatureServiceResource(ModelResource):
                     'success': True
                 })
             except Exception as e:
-                logger.exception()
+                logger.exception(e)
                 delete_response_obj.append({
                     'success': False,
                     'error': {
                         'code': -999999,
-                        'description': 'Error deleting feature: ' + str(e)
+                        'description': 'Error deleting feature: {}'.format(e)
                     }
                 })
 
@@ -470,12 +471,12 @@ class TemporaryFileResource(ModelResource):
 
             bundle.data['table_name'] = table_name
 
-            add_point_column(dataset_id)
+            add_geometry_column(dataset_id)
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError:
-            logger.exception()
+        except InternalError as e:
+            logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)
@@ -504,8 +505,8 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError:
-            logger.exception()
+        except InternalError as e:
+            logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
         return self.create_response(request, bundle)

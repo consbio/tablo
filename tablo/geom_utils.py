@@ -6,7 +6,6 @@ from pyproj import Proj, transform
 from math import sqrt, fabs, cos, radians
 from itertools import product
 
-
 GLOBAL_EXTENT_WEB_MERCATOR = (-20037508.342789244, -20037342.166152496, 20037508.342789244, 20037342.16615247)
 SQL_BOX_REGEX = re.compile('BOX\((.*) (.*),(.*) (.*)\)')
 
@@ -290,7 +289,6 @@ class Extent(object):
         new_extent.spatial_reference.srs = "EPSG:3857"
         return new_extent
 
-
     def project_to_geographic(self):
         """
         Project self to geographic (only some ESRI extents are valid here)
@@ -320,7 +318,6 @@ class Extent(object):
         new_extent.spatial_reference.wkid = 4326
         new_extent.spatial_reference.srs = "EPSG:4326"
         return new_extent
-
 
     def _get_projected_extent(self, src_srs, target_srs, edge_points=9):
         """
