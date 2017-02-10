@@ -32,7 +32,7 @@ def to_esri_feature(wkt):
     elif geom_type in ['LINESTRING', 'MULTILINESTRING']:
         return {'paths': _geom_repl()}
     elif geom_type == 'POLYGON' or geom_type == 'MULTIPOLYGON':
-        return {'rings': _geom_repl()}
+        return {'rings': _geom_repl()[0]}
 
 
 def from_esri_feature(feature, geom_type):
