@@ -60,3 +60,6 @@ target/
 .project
 .pydevproject
 .settings/*
+
+# Local settings
+tablo/tests/local_test_settings.py
