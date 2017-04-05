@@ -4,6 +4,9 @@ import logging
 import re
 import uuid
 import sqlparse
+import base64
+import os
+
 
 from collections import OrderedDict
 from datetime import datetime
@@ -12,6 +15,9 @@ from django.db import models, DatabaseError, connection
 from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
+
+from PIL import Image, ImageOps
+from io import BytesIO, StringIO
 
 from tablo import wkt
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
@@ -27,13 +33,13 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
     'character': 'esriFieldTypeString',
-    'character varying': 'esriFieldTypeString',
+    'character varying': 'esriFieldTypeBlob',
     'double precision': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
     'timestamp without time zone': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
-    'OID': 'esriFieldTypeOID'
+    'OID': 'esriFieldTypeOID',
 }
 
 IMPORT_SUFFIX = '_import'
@@ -700,6 +706,9 @@ class FeatureServiceLayer(models.Model):
         )
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        images_large = {}
+        images_thumbs = {}
         values = []
         for attribute_name in colnames_in_table:
             if attribute_name in date_fields and feature['attributes'][attribute_name]:
@@ -707,6 +716,14 @@ class FeatureServiceLayer(models.Model):
                     values.append(feature['attributes'][attribute_name])
                 else:
                     values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
+
+            elif attribute_name in image_fields and feature['attributes'][attribute_name]:
+                print("process_image_data")
+                img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][attribute_name],
+                                                                         str(self.service.id), attribute_name, images_large,
+                                                                         images_thumbs)
+
+                values.append(img_base64_data)
             else:
                 values.append(feature['attributes'][attribute_name])
 
@@ -714,6 +731,16 @@ class FeatureServiceLayer(models.Model):
             c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
             c.execute(set_geom_command, [primary_key])
+
+        # save out large images
+        for key, value in images_large.items():
+            filename = key + '-' + str(primary_key) + '-' + "large.jpg"
+            FeatureServiceLayer.save_image(value, filename)
+
+        # save out thumbnails
+        for key, value in images_thumbs.items():
+            filename = key + '-' + str(primary_key) + '-' + "small.jpg"
+            FeatureServiceLayer.save_image(value, filename)
 
         return primary_key
 
@@ -731,6 +758,9 @@ class FeatureServiceLayer(models.Model):
         primary_key = feature['attributes'][PRIMARY_KEY_NAME]
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        images_large = {}
+        images_thumbs = {}
         argument_updates = []
         argument_values = []
         for key in feature['attributes']:
@@ -745,6 +775,12 @@ class FeatureServiceLayer(models.Model):
                         argument_values.append(feature['attributes'][key])
                     else:
                         argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
+                elif key in image_fields and feature['attributes'][key]:
+                    print("process_image_data")
+                    img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][key],
+                                                                             str(self.service.id), key, images_large,
+                                                                             images_thumbs)
+                    argument_values.append(img_base64_data)
                 else:
                     argument_values.append(feature['attributes'][key])
 
@@ -771,6 +807,16 @@ class FeatureServiceLayer(models.Model):
                 )
                 c.execute(set_geom_command, [primary_key])
 
+        # save out large images
+        for key, value in images_large.items():
+            filename = key + '-' + str(primary_key) + '-' + "large.jpg"
+            FeatureServiceLayer.save_image(value, filename)
+
+        # save out thumbnails
+        for key, value in images_thumbs.items():
+            filename = key + '-' + str(primary_key) + '-' + "small.jpg"
+            FeatureServiceLayer.save_image(value, filename)
+
         return primary_key
 
     def delete_feature(self, primary_key):
@@ -783,7 +829,82 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(delete_command, [primary_key])
 
+        # delete associated image files
+        for file in os.listdir(TEMPORARY_FILE_LOCATION):
+            if file.endswith(".jpg"):
+                #print(file)
+                idx = 0
+                for x in file.split("-"):
+                    # check service id part
+                    if idx == 0 and x != str(self.service.id):
+                        break
+
+                    # check primary key
+                    if idx == 2 and x != str(primary_key):
+                        break
+
+                    # if we get here the file will be deleted
+                    if idx == 3:
+                        full_path = os.path.join(TEMPORARY_FILE_LOCATION, file)
+                        print("deleting image from path: ", full_path)
+
+                        # Remove the image file if it exists
+                        try:
+                            if os.path.exists(full_path):
+                                os.remove(full_path)
+
+                        except Exception as e:
+                            print("Failed to delete image at: ", full_path)
+
+                        break
+
+                    idx += 1
+
         return primary_key
+
+    @staticmethod
+    def process_image_data(data, dataset_table_name, attribute_name, images_large, images_thumbs):
+        print("Image Handling... dataset_table_name: " + dataset_table_name)
+
+        # Create large image from base64 string in attributes
+        #
+        # Remove the 'data:image/jpeg;base64' so the data can be converted to an image...
+        list_lines = data.split(',', 1)
+        image_data = list_lines[1]
+        im = Image.open(BytesIO(base64.b64decode(image_data)))
+        # im = ImageOps.fit(image, (800, 600), Image.ANTIALIAS)
+
+        # Save large image to temporary location
+        filename = dataset_table_name + '-' + attribute_name
+        images_large[filename] = im
+
+        # Create and save thumbnail image
+        thumb = ImageOps.fit(im, (64, 64), Image.ANTIALIAS)
+        filename = dataset_table_name + '-' + attribute_name
+        images_thumbs[filename] = thumb
+
+        # Convert thumbnail to base64 string and save in database field
+        buffer = BytesIO()
+        thumb.save(buffer, format="JPEG")
+        img_str = 'data:image/jpeg;base64,' + base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        return img_str
+
+    @staticmethod
+    def save_image(img, filename):
+
+        full_path = os.path.join(TEMPORARY_FILE_LOCATION, filename)
+        print("save_image to path: ", full_path)
+
+        # Remove the old file first
+        try:
+            if os.path.exists(full_path):
+                os.remove(full_path)
+
+            img.save(full_path)
+
+        except Exception as e:
+            print("Failed to save image to: ", full_path)
 
 
 class FeatureServiceLayerRelations(models.Model):
@@ -911,7 +1032,8 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
             'ylocation': 'double precision',
             'dropdownedit': 'text',
             'dropdown': 'text',
-            'double': 'double precision'
+            'double': 'double precision',
+            'image': 'text'
         }
         for cell in row:
             create_table_command += ', {field_name} {type} {null}'.format(
