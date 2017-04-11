@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 
+FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', '')
+
 
 class FeatureServiceDetailView(DetailView):
     model = FeatureService
@@ -674,26 +676,51 @@ class ImageView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):
 
+        from django.core.files.storage import default_storage as image_storage
+
         entry_id = kwargs.get('entry_id')
         col_name = kwargs.get('col_name')
 
         service_id = self.feature_service_layer.service.id
         layer_index = self.feature_service_layer.layer_order
 
-        new_filename = '{service_id}-{col_name}-{entry_id}-large.jpg'.format(
-            service_id=service_id,
-            col_name=col_name,
-            entry_id=entry_id
-        )
+        #
+        # new_filename = '{domain_name}/{service_id}/{entry_id}/{col_name}/fullsize.jpg'.format(
+        #     domain_name=FILE_STORE_DOMAIN_NAME,
+        #     service_id=service_id,
+        #     entry_id=entry_id,
+        #     col_name=col_name
+        # )
+        # print("*************************** new_filename: ", new_filename)
+        # print("*************************** new_filename: ", new_filename)
+        # print("*************************** new_filename: ", new_filename)
+        # print("*************************** new_filename: ", new_filename)
+        # print("*************************** new_filename: ", new_filename)
+        #
+        # file_path = os.path.join(TEMPORARY_FILE_LOCATION, new_filename)
+        # print("file_path: ", file_path)
+        #
+        # try:
+        #     if os.path.exists(file_path):
+        #         with open(file_path, 'rb') as fh:
+        #             response = HttpResponse(fh.read(), content_type="image/jpeg")
+        #             # response['Content-Disposition'] = 'inline; filename=' + os.path.basename(file_path)
+        #             return response
+        #     else:
+        #         return HttpResponseBadRequest('Missing File')
+        #
+        # except Exception as e:
+        #     print("Failed to load file at: ", file_path)
 
-        print("new_filename: ", new_filename)
 
-        file_path = os.path.join(TEMPORARY_FILE_LOCATION, new_filename)
-        print("file_path: ", file_path)
-
+        # Read from s3
         try:
-            if os.path.exists(file_path):
-                with open(file_path, 'rb') as fh:
+            s3_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + \
+                      str(entry_id) + '/' + col_name + '/fullsize.jpg'
+
+            print("*************************** load from s3: ", s3_path)
+            if image_storage.exists(s3_path):
+                with image_storage.open(s3_path, 'rb') as fh:
                     response = HttpResponse(fh.read(), content_type="image/jpeg")
                     # response['Content-Disposition'] = 'inline; filename=' + os.path.basename(file_path)
                     return response
@@ -701,13 +728,5 @@ class ImageView(FeatureLayerView):
                 return HttpResponseBadRequest('Missing File')
 
         except Exception as e:
-            print("Failed to load file at: ", file_path)
-            update_response_obj.append({
-                'success': False,
-                'error': {
-                    'code': -999999,
-                    'description': 'Error updating feature: {}'.format(e)
-                }
-            })
-            traceback.print_exc()
+            print("Failed to load image from s3: ", e)
 

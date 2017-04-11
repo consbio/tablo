@@ -6,7 +6,7 @@ import uuid
 import sqlparse
 import base64
 import os
-
+import shutil
 
 from collections import OrderedDict
 from datetime import datetime
@@ -24,8 +24,8 @@ from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsE
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
 
-
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
+FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', '')
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
@@ -718,10 +718,15 @@ class FeatureServiceLayer(models.Model):
                     values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
 
             elif attribute_name in image_fields and feature['attributes'][attribute_name]:
-                print("process_image_data")
-                img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][attribute_name],
-                                                                         str(self.service.id), attribute_name, images_large,
-                                                                         images_thumbs)
+                print("************************************************ process_image_data")
+                print("************************************************ process_image_data")
+                print("************************************************ process_image_data")
+                print("************************************************ process_image_data")
+                print("************************************************ process_image_data")
+                print("************************************************ process_image_data")
+                image_path = FeatureServiceLayer.create_image_path(self.service.id, "NO_PRIMARY_KEY", attribute_name)
+                img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][attribute_name], image_path,
+                                                                         images_large, images_thumbs)
 
                 values.append(img_base64_data)
             else:
@@ -732,15 +737,9 @@ class FeatureServiceLayer(models.Model):
             primary_key = c.fetchone()[0]
             c.execute(set_geom_command, [primary_key])
 
-        # save out large images
         for key, value in images_large.items():
-            filename = key + '-' + str(primary_key) + '-' + "large.jpg"
-            FeatureServiceLayer.save_image(value, filename)
-
-        # save out thumbnails
-        for key, value in images_thumbs.items():
-            filename = key + '-' + str(primary_key) + '-' + "small.jpg"
-            FeatureServiceLayer.save_image(value, filename)
+            image_path = key.replace("NO_PRIMARY_KEY", str(primary_key))
+            FeatureServiceLayer.save_image(value, image_path, "fullsize.jpg")
 
         return primary_key
 
@@ -776,10 +775,15 @@ class FeatureServiceLayer(models.Model):
                     else:
                         argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
                 elif key in image_fields and feature['attributes'][key]:
-                    print("process_image_data")
-                    img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][key],
-                                                                             str(self.service.id), key, images_large,
-                                                                             images_thumbs)
+                    print("************************************************ process_image_data")
+                    print("************************************************ process_image_data")
+                    print("************************************************ process_image_data")
+                    print("************************************************ process_image_data")
+                    print("************************************************ process_image_data")
+                    print("************************************************ process_image_data")
+                    image_path = FeatureServiceLayer.create_image_path(self.service.id, "NO_PRIMARY_KEY", key)
+                    img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][key], image_path,
+                                                                             images_large, images_thumbs)
                     argument_values.append(img_base64_data)
                 else:
                     argument_values.append(feature['attributes'][key])
@@ -809,17 +813,14 @@ class FeatureServiceLayer(models.Model):
 
         # save out large images
         for key, value in images_large.items():
-            filename = key + '-' + str(primary_key) + '-' + "large.jpg"
-            FeatureServiceLayer.save_image(value, filename)
-
-        # save out thumbnails
-        for key, value in images_thumbs.items():
-            filename = key + '-' + str(primary_key) + '-' + "small.jpg"
-            FeatureServiceLayer.save_image(value, filename)
+            image_path = key.replace("NO_PRIMARY_KEY", str(primary_key))
+            FeatureServiceLayer.save_image(value, image_path, "fullsize.jpg")
 
         return primary_key
 
     def delete_feature(self, primary_key):
+
+        from django.core.files.storage import default_storage as image_storage
 
         delete_command = 'DELETE FROM {table_name} WHERE {primary_key}=%s'.format(
             table_name=self.table,
@@ -829,42 +830,55 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(delete_command, [primary_key])
 
+        #
         # delete associated image files
-        for file in os.listdir(TEMPORARY_FILE_LOCATION):
-            if file.endswith(".jpg"):
-                #print(file)
-                idx = 0
-                for x in file.split("-"):
-                    # check service id part
-                    if idx == 0 and x != str(self.service.id):
-                        break
 
-                    # check primary key
-                    if idx == 2 and x != str(primary_key):
-                        break
+        # # File storage
+        # rec_path = FILE_STORE_DOMAIN_NAME + '/' + str(self.service.id) + '/' + str(primary_key)
+        # print("rec_path: " + rec_path)
+        #
+        # os_path = os.path.join(TEMPORARY_FILE_LOCATION, rec_path)
+        # print("****************************** delete_feature: ", os_path)
+        #
+        # try:
+        #     # Remove the old file first
+        #     if os.path.exists(os_path):
+        #         #os.remove(os_path)
+        #         shutil.rmtree(os_path)
+        #
+        # except Exception as e:
+        #     print("Failed to save image: ", e)
 
-                    # if we get here the file will be deleted
-                    if idx == 3:
-                        full_path = os.path.join(TEMPORARY_FILE_LOCATION, file)
-                        print("deleting image from path: ", full_path)
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
 
-                        # Remove the image file if it exists
-                        try:
-                            if os.path.exists(full_path):
-                                os.remove(full_path)
+        # s3 storage
+        for colname in image_fields:
 
-                        except Exception as e:
-                            print("Failed to delete image at: ", full_path)
+            try:
+                s3_path = FILE_STORE_DOMAIN_NAME + '/' + str(self.service_id) + '/' + \
+                          str(primary_key) + '/' + colname + '/fullsize.jpg'
 
-                        break
+                print("*************************** deleting from s3: ", s3_path)
+                if image_storage.exists(s3_path):
+                    image_storage.delete(s3_path)
+                    print("*************************** deleted OK: ", s3_path)
+                else:
+                    return HttpResponseBadRequest('Missing Path')
 
-                    idx += 1
+            except Exception as e:
+                print("Error deleting s3 path: ", e)
 
         return primary_key
 
     @staticmethod
-    def process_image_data(data, dataset_table_name, attribute_name, images_large, images_thumbs):
-        print("Image Handling... dataset_table_name: " + dataset_table_name)
+    def create_image_path(service_id, row_id, field_name):
+        file_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + str(row_id) + '/' + field_name
+        print("file_path: " + file_path)
+        return file_path
+
+    @staticmethod
+    def process_image_data(data, image_path, images_large, images_thumbs):
+        print("Image Handling... image_path: " + image_path)
 
         # Create large image from base64 string in attributes
         #
@@ -875,13 +889,13 @@ class FeatureServiceLayer(models.Model):
         # im = ImageOps.fit(image, (800, 600), Image.ANTIALIAS)
 
         # Save large image to temporary location
-        filename = dataset_table_name + '-' + attribute_name
-        images_large[filename] = im
+        # filename = dataset_table_name + '-' + attribute_name
+        images_large[image_path] = im
 
         # Create and save thumbnail image
         thumb = ImageOps.fit(im, (64, 64), Image.ANTIALIAS)
-        filename = dataset_table_name + '-' + attribute_name
-        images_thumbs[filename] = thumb
+        # filename = dataset_table_name + '-' + attribute_name
+        images_thumbs[image_path] = thumb
 
         # Convert thumbnail to base64 string and save in database field
         buffer = BytesIO()
@@ -891,20 +905,72 @@ class FeatureServiceLayer(models.Model):
         return img_str
 
     @staticmethod
-    def save_image(img, filename):
+    def save_image(img, file_path, file_name):
 
-        full_path = os.path.join(TEMPORARY_FILE_LOCATION, filename)
-        print("save_image to path: ", full_path)
+        from django.core.files.storage import default_storage as image_storage
 
-        # Remove the old file first
+        # filestore save...
+        # os_path = os.path.join(TEMPORARY_FILE_LOCATION, file_path)
+        # print("****************************** save_image to full_path: ", os_path)
+        #
+        # try:
+        #     if not os.path.exists(os_path):
+        #         os.makedirs(os_path)
+        #
+        #     full_path = os_path + "/" + file_name
+        #     print("save_image to path: ", full_path)
+        #
+        #     # Remove the old file first
+        #     if os.path.exists(full_path):
+        #         os.remove(full_path)
+        #
+        #     img.save(full_path)
+        #
+        # except Exception as e:
+        #      print("Failed to save image: ", e)
+        #
+
+        # Save out to s3
         try:
-            if os.path.exists(full_path):
-                os.remove(full_path)
+            s3_path = file_path + "/" + file_name
+            print("save_image to s3: ", s3_path)
 
-            img.save(full_path)
+            storage_exists = image_storage.exists(s3_path)
+            print("storage exists: ", storage_exists)
+            with image_storage.open(s3_path, 'wb') as fh:
+                buffer = BytesIO()
+                img.save(buffer, format="JPEG")
+                fh.write(buffer.getvalue())
+                img.close()
+            #print("save_image to s3 SUCCESS")
 
         except Exception as e:
-            print("Failed to save image to: ", full_path)
+            print("Failed to save image to s3: ", e)
+
+        # Debugging code:  Read from s3
+        # try:
+        #     s3_path = file_path + "/" + file_name
+        #
+        #     storage_exists = image_storage.exists(s3_path)
+        #     print("storage exists: ", storage_exists)
+        #
+        #     print("*************************** load from s3: ", s3_path)
+        #     with image_storage.open(s3_path, 'rb') as fh:
+        #         #jpgdata = fh.read()
+        #         #if jpgdata.startswith(b'\xff\xd8'):
+        #         #    text = u'This is a jpeg file (%d bytes long)\n'
+        #         #else:
+        #         #    text = u'This is a random file (%d bytes long)\n'
+        #         #print(text % len(jpgdata))
+        #
+        #         new_img = Image.open(fh)
+        #         new_img.load()
+        #         print("new_img: " + str(new_img.width) + ',' + str(new_img.height))
+        #         new_img.close()
+        #         print("*************************** load from s3 SUCCESS: ")
+        #
+        # except Exception as e:
+        #     print("Failed to load image from s3: ", e)
 
 
 class FeatureServiceLayerRelations(models.Model):
