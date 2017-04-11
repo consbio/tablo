@@ -475,9 +475,6 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError as e:
-            logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
         except Exception as e:
             logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
