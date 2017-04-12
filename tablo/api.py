@@ -362,7 +362,7 @@ class TemporaryFileResource(ModelResource):
 
                 {
                     "fieldNames": ["field one", "field two", "latitude", "longitude"],
-                    "dataTypes": ["STRING", "INTEGER", "DOUBLE", "DOUBLE"],
+                    "dataTypes": ["String", "Integer", "Double", "Double"],
                     "optionalFields": ["field one"],
                     "xColumn": "longitude",
                     "yColumn": "latitude",
