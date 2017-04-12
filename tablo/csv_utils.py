@@ -44,7 +44,7 @@ def prepare_csv_rows(csv_file, csv_info=None):
 
     if csv_info:
         # If we have csv_info, then we know the column types, no need to guess
-        types = apply_csv_types(row_set.sample, csv_info)
+        types = types_from_config(row_set.sample, csv_info)
     else:
         types = type_guess(row_set.sample, strict=True)
 
@@ -53,7 +53,7 @@ def prepare_csv_rows(csv_file, csv_info=None):
     return row_set
 
 
-def apply_csv_types(rows, csv_info):
+def types_from_config(rows, csv_info):
     """
     Determines the type of the columns based on the csvInfo.dataTypes. This allows us to keep from guessing
     when the sender of the file knows more about the types than we do.
