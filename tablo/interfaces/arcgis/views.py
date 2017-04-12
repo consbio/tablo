@@ -26,7 +26,7 @@ import os
 
 from django.db.utils import DatabaseError
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed, HttpResponseNotFound, HttpResponseServerError
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -44,7 +44,9 @@ logger = logging.getLogger(__name__)
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 
-FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', '')
+FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
+LARGE_IMAGE_NAME = getattr(settings, 'LARGE_IMAGE_NAME', 'fullsize.jpg')
+
 
 
 class FeatureServiceDetailView(DetailView):
@@ -682,19 +684,14 @@ class ImageView(FeatureLayerView):
         col_name = kwargs.get('col_name')
 
         service_id = self.feature_service_layer.service.id
-        layer_index = self.feature_service_layer.layer_order
 
-        #
+        # Local File-based storage...
         # new_filename = '{domain_name}/{service_id}/{entry_id}/{col_name}/fullsize.jpg'.format(
         #     domain_name=FILE_STORE_DOMAIN_NAME,
         #     service_id=service_id,
         #     entry_id=entry_id,
         #     col_name=col_name
         # )
-        # print("*************************** new_filename: ", new_filename)
-        # print("*************************** new_filename: ", new_filename)
-        # print("*************************** new_filename: ", new_filename)
-        # print("*************************** new_filename: ", new_filename)
         # print("*************************** new_filename: ", new_filename)
         #
         # file_path = os.path.join(TEMPORARY_FILE_LOCATION, new_filename)
@@ -709,24 +706,18 @@ class ImageView(FeatureLayerView):
         #     else:
         #         return HttpResponseBadRequest('Missing File')
         #
-        # except Exception as e:
-        #     print("Failed to load file at: ", file_path)
-
+        # except IOError as e:
+        #     return HttpResponseBadRequest('Error reading file: ' + e)
 
         # Read from s3
-        try:
-            s3_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + \
-                      str(entry_id) + '/' + col_name + '/fullsize.jpg'
+        s3_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + \
+            str(entry_id) + '/' + col_name + '/' + LARGE_IMAGE_NAME
 
-            print("*************************** load from s3: ", s3_path)
-            if image_storage.exists(s3_path):
-                with image_storage.open(s3_path, 'rb') as fh:
-                    response = HttpResponse(fh.read(), content_type="image/jpeg")
-                    # response['Content-Disposition'] = 'inline; filename=' + os.path.basename(file_path)
-                    return response
-            else:
-                return HttpResponseBadRequest('Missing File')
+        if image_storage.exists(s3_path):
+            with image_storage.open(s3_path, 'rb') as fh:
+                response = HttpResponse(fh.read(), content_type="image/jpeg")
+                return response
+        else:
+            return HttpResponseNotFound()
 
-        except Exception as e:
-            print("Failed to load image from s3: ", e)
 
