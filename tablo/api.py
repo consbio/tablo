@@ -362,7 +362,7 @@ class TemporaryFileResource(ModelResource):
 
                 {
                     "fieldNames": ["field one", "field two", "latitude", "longitude"],
-                    "dataTypes": ["STRING", "INTEGER", "DOUBLE", "DOUBLE"],
+                    "dataTypes": ["String", "Integer", "Double", "Double"],
                     "optionalFields": ["field one"],
                     "xColumn": "longitude",
                     "yColumn": "latitude",
@@ -462,7 +462,7 @@ class TemporaryFileResource(ModelResource):
             # Use separate iterator of table rows to not exaust the main one
             optional_fields = determine_optional_fields(prepare_csv_rows(obj.file))
 
-            row_set = prepare_csv_rows(obj.file)
+            row_set = prepare_csv_rows(obj.file, csv_info)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, optional_fields=optional_fields)
             populate_data(table_name, row_set)
@@ -475,7 +475,7 @@ class TemporaryFileResource(ModelResource):
 
             populate_point_data(dataset_id, csv_info)
             obj.delete()    # Temporary file has been moved to database, safe to delete
-        except InternalError as e:
+        except Exception as e:
             logger.exception(e)
             raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
 
