@@ -69,7 +69,11 @@ def types_from_config(rows, csv_info):
     for row in rows:
         for cell in row:
             name_index = csv_info['fieldNames'].index(cell.column.lower())
-            columns.append(convert_type[csv_info['dataTypes'][name_index].lower()]())
+            type = convert_type[csv_info['dataTypes'][name_index].lower()]
+            if type == DateType:
+                columns.append(type(None))
+            else:
+                columns.append(type())
     return columns
 
 
