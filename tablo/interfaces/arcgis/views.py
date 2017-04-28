@@ -22,11 +22,10 @@ import io
 import json
 import logging
 import time
-import os
 
 from django.db.utils import DatabaseError
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed, HttpResponseNotFound, HttpResponseServerError
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed, HttpResponseNotFound
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
@@ -46,7 +45,6 @@ TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tm
 
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
 LARGE_IMAGE_NAME = getattr(settings, 'LARGE_IMAGE_NAME', 'fullsize.jpg')
-
 
 
 class FeatureServiceDetailView(DetailView):
@@ -671,10 +669,7 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
     return features
 
 
-
-
 class ImageView(FeatureLayerView):
-
 
     def handle_request(self, request, **kwargs):
 
@@ -685,38 +680,18 @@ class ImageView(FeatureLayerView):
 
         service_id = self.feature_service_layer.service.id
 
-        # Local File-based storage...
-        # new_filename = '{domain_name}/{service_id}/{entry_id}/{col_name}/fullsize.jpg'.format(
-        #     domain_name=FILE_STORE_DOMAIN_NAME,
-        #     service_id=service_id,
-        #     entry_id=entry_id,
-        #     col_name=col_name
-        # )
-        # print("*************************** new_filename: ", new_filename)
-        #
-        # file_path = os.path.join(TEMPORARY_FILE_LOCATION, new_filename)
-        # print("file_path: ", file_path)
-        #
-        # try:
-        #     if os.path.exists(file_path):
-        #         with open(file_path, 'rb') as fh:
-        #             response = HttpResponse(fh.read(), content_type="image/jpeg")
-        #             # response['Content-Disposition'] = 'inline; filename=' + os.path.basename(file_path)
-        #             return response
-        #     else:
-        #         return HttpResponseBadRequest('Missing File')
-        #
-        # except IOError as e:
-        #     return HttpResponseBadRequest('Error reading file: ' + e)
-
         # Read from s3
-        s3_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + \
-            str(entry_id) + '/' + col_name + '/' + LARGE_IMAGE_NAME
+        s3_path = '{domain}/{service_id}/{entry_id}/{col_name}/{image_name}'.format(
+            domain=FILE_STORE_DOMAIN_NAME,
+            service_id=service_id,
+            entry_id=entry_id,
+            col_name=col_name,
+            image_name=LARGE_IMAGE_NAME
+        )
 
         if image_storage.exists(s3_path):
             with image_storage.open(s3_path, 'rb') as fh:
-                response = HttpResponse(fh.read(), content_type="image/jpeg")
-                return response
+                return HttpResponse(fh.read(), content_type="image/jpeg")
         else:
             return HttpResponseNotFound()
 

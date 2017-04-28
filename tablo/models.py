@@ -5,8 +5,6 @@ import re
 import uuid
 import sqlparse
 import base64
-import os
-import shutil
 
 from collections import OrderedDict
 from datetime import datetime
@@ -17,16 +15,18 @@ from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
 from PIL import Image, ImageOps
-from io import BytesIO, StringIO
+from io import BytesIO
 
 from tablo import wkt
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
+from django.core.files.storage import default_storage as image_storage
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
 LARGE_IMAGE_NAME = getattr(settings, 'LARGE_IMAGE_NAME', 'fullsize.jpg')
+NO_PK = "NO_PK"
 
 
 POSTGIS_ESRI_FIELD_MAPPING = {
@@ -709,6 +709,7 @@ class FeatureServiceLayer(models.Model):
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
         images_large = {}
         images_thumbs = {}
         values = []
@@ -720,9 +721,10 @@ class FeatureServiceLayer(models.Model):
                     values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
 
             elif attribute_name in image_fields and feature['attributes'][attribute_name]:
-                image_path = FeatureServiceLayer.create_image_path(self.service.id, "NO_PRIMARY_KEY", attribute_name)
-                img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][attribute_name], image_path,
-                                                                         images_large, images_thumbs)
+                # Using NO_PK as a placeholder for the actual PK which is available after the insert
+                image_path = FeatureServiceLayer.create_image_path(self.service.id, NO_PK, attribute_name)
+                img_base64_data = FeatureServiceLayer.process_image_data(
+                    feature['attributes'][attribute_name], image_path, images_large, images_thumbs)
 
                 values.append(img_base64_data)
             else:
@@ -734,7 +736,7 @@ class FeatureServiceLayer(models.Model):
             c.execute(set_geom_command, [primary_key])
 
         for key, value in images_large.items():
-            image_path = key.replace("NO_PRIMARY_KEY", str(primary_key))
+            image_path = key.replace(NO_PK, str(primary_key))
             FeatureServiceLayer.save_image(value, image_path, LARGE_IMAGE_NAME)
 
         return primary_key
@@ -754,6 +756,7 @@ class FeatureServiceLayer(models.Model):
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
         images_large = {}
         images_thumbs = {}
         argument_updates = []
@@ -771,9 +774,10 @@ class FeatureServiceLayer(models.Model):
                     else:
                         argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
                 elif key in image_fields and feature['attributes'][key]:
-                    image_path = FeatureServiceLayer.create_image_path(self.service.id, "NO_PRIMARY_KEY", key)
-                    img_base64_data = FeatureServiceLayer.process_image_data(feature['attributes'][key], image_path,
-                                                                             images_large, images_thumbs)
+                    image_path = FeatureServiceLayer.create_image_path(self.service.id, primary_key, key)
+                    img_base64_data = FeatureServiceLayer.process_image_data(
+                        feature['attributes'][key], image_path, images_large, images_thumbs
+                    )
                     argument_values.append(img_base64_data)
                 else:
                     argument_values.append(feature['attributes'][key])
@@ -803,14 +807,11 @@ class FeatureServiceLayer(models.Model):
 
         # save out large images
         for key, value in images_large.items():
-            image_path = key.replace("NO_PRIMARY_KEY", str(primary_key))
             FeatureServiceLayer.save_image(value, image_path, LARGE_IMAGE_NAME)
 
         return primary_key
 
     def delete_feature(self, primary_key):
-
-        from django.core.files.storage import default_storage as image_storage
 
         delete_command = 'DELETE FROM {table_name} WHERE {primary_key}=%s'.format(
             table_name=self.table,
@@ -820,33 +821,16 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(delete_command, [primary_key])
 
-        #
-        # delete associated image files
-
-        # # File storage
-        # rec_path = FILE_STORE_DOMAIN_NAME + '/' + str(self.service.id) + '/' + str(primary_key)
-        # print("rec_path: " + rec_path)
-        #
-        # os_path = os.path.join(TEMPORARY_FILE_LOCATION, rec_path)
-        # print("****************************** delete_feature: ", os_path)
-        #
-        # try:
-        #     # Remove the old file first
-        #     if os.path.exists(os_path):
-        #         #os.remove(os_path)
-        #         shutil.rmtree(os_path)
-        #
-        # except Exception as e:
-        #     logger.exception(e)
-
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
 
-        # s3 storage
+        # delete image from s3 storage
         for col_name in image_fields:
 
             try:
-                s3_path = FeatureServiceLayer.create_image_path(self.service.id, primary_key, col_name) \
-                    + '/' + LARGE_IMAGE_NAME
+                s3_path = '{0}/{1}'.format(
+                    FeatureServiceLayer.create_image_path(self.service.id, primary_key, col_name),
+                    LARGE_IMAGE_NAME
+                )
 
                 if image_storage.exists(s3_path):
                     image_storage.delete(s3_path)
@@ -858,14 +842,18 @@ class FeatureServiceLayer(models.Model):
 
     @staticmethod
     def create_image_path(service_id, row_id, field_name):
-        file_path = FILE_STORE_DOMAIN_NAME + '/' + str(service_id) + '/' + str(row_id) + '/' + field_name
+        file_path = '{0}/{1}/{2}/{3}'.format(
+            FILE_STORE_DOMAIN_NAME,
+            service_id,
+            row_id,
+            field_name
+        )
         return file_path
 
     @staticmethod
     def process_image_data(data, image_path, images_large, images_thumbs):
 
         # Create large image from base64 string in attributes
-        #
 
         # Remove the 'data:image/jpeg;base64' so the data can be converted to an image...
         list_lines = data.split(',', 1)
@@ -891,32 +879,12 @@ class FeatureServiceLayer(models.Model):
     @staticmethod
     def save_image(img, file_path, file_name):
 
-        from django.core.files.storage import default_storage as image_storage
-
-        # filestore save...
-        # os_path = os.path.join(TEMPORARY_FILE_LOCATION, file_path)
-        # print("****************************** save_image to full_path: ", os_path)
-        #
-        # try:
-        #     if not os.path.exists(os_path):
-        #         os.makedirs(os_path)
-        #
-        #     full_path = os_path + "/" + file_name
-        #     print("save_image to path: ", full_path)
-        #
-        #     # Remove the old file first
-        #     if os.path.exists(full_path):
-        #         os.remove(full_path)
-        #
-        #     img.save(full_path)
-        #
-        # except Exception as e:
-        #      print("Failed to save image: ", e)
-        #
-
         # Save out to s3
         try:
-            s3_path = file_path + "/" + file_name
+            s3_path = '{0}/{1}'.format(
+                file_path,
+                file_name
+            )
 
             # storage_exists = image_storage.exists(s3_path)
             with image_storage.open(s3_path, 'wb') as fh:
