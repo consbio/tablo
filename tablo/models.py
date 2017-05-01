@@ -21,7 +21,8 @@ from tablo import wkt
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
-from django.core.files.storage import default_storage as image_storage
+from tablo.storage import default_public_storage as image_storage
+
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')

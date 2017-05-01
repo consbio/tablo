@@ -32,6 +32,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, View
 from django.conf import settings
 
+from tablo.storage import default_public_storage as image_storage
+
 from tablo import wkt
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
@@ -672,8 +674,6 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
 class ImageView(FeatureLayerView):
 
     def handle_request(self, request, **kwargs):
-
-        from django.core.files.storage import default_storage as image_storage
 
         entry_id = kwargs.get('entry_id')
         col_name = kwargs.get('col_name')
