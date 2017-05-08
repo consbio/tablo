@@ -34,7 +34,7 @@ from django.conf import settings
 
 from tablo.storage import default_public_storage as image_storage
 
-from tablo import wkt
+from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 from tablo.utils import json_date_serializer
@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
 
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
-LARGE_IMAGE_NAME = getattr(settings, 'LARGE_IMAGE_NAME', 'fullsize.jpg')
+
 
 
 class FeatureServiceDetailView(DetailView):
