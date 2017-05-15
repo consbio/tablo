@@ -1,0 +1,1 @@
+LARGE_IMAGE_NAME = 'fullsize.jpg'

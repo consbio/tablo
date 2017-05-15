@@ -4,6 +4,7 @@ import logging
 import re
 import uuid
 import sqlparse
+import base64
 
 from collections import OrderedDict
 from datetime import datetime
@@ -13,13 +14,21 @@ from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 from sqlparse.tokens import Token
 
-from tablo import wkt
+from PIL import Image, ImageOps
+from io import BytesIO
+
+from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
+from tablo.storage import default_public_storage as image_storage
 
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
+FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
+
+NO_PK = "NO_PK"
+
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
@@ -27,13 +36,13 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
     'character': 'esriFieldTypeString',
-    'character varying': 'esriFieldTypeString',
+    'character varying': 'esriFieldTypeBlob',
     'double precision': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
     'timestamp without time zone': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
     'Unknown': 'esriFieldTypeString',
-    'OID': 'esriFieldTypeOID'
+    'OID': 'esriFieldTypeOID',
 }
 
 IMPORT_SUFFIX = '_import'
@@ -700,6 +709,10 @@ class FeatureServiceLayer(models.Model):
         )
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
+        images_large = {}
+        images_thumbs = {}
         values = []
         for attribute_name in colnames_in_table:
             if attribute_name in date_fields and feature['attributes'][attribute_name]:
@@ -707,6 +720,14 @@ class FeatureServiceLayer(models.Model):
                     values.append(feature['attributes'][attribute_name])
                 else:
                     values.append(datetime.fromtimestamp(feature['attributes'][attribute_name] / 1000))
+
+            elif attribute_name in image_fields and feature['attributes'][attribute_name]:
+                # Using NO_PK as a placeholder for the actual PK which is available after the insert
+                image_path = FeatureServiceLayer.create_image_path(self.service.id, NO_PK, attribute_name)
+                img_base64_data = FeatureServiceLayer.process_image_data(
+                    feature['attributes'][attribute_name], image_path, images_large, images_thumbs)
+
+                values.append(img_base64_data)
             else:
                 values.append(feature['attributes'][attribute_name])
 
@@ -714,6 +735,10 @@ class FeatureServiceLayer(models.Model):
             c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
             c.execute(set_geom_command, [primary_key])
+
+        for key, value in images_large.items():
+            image_path = key.replace(NO_PK, str(primary_key))
+            FeatureServiceLayer.save_image(value, image_path, LARGE_IMAGE_NAME)
 
         return primary_key
 
@@ -731,6 +756,10 @@ class FeatureServiceLayer(models.Model):
         primary_key = feature['attributes'][PRIMARY_KEY_NAME]
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+        # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
+        images_large = {}
+        images_thumbs = {}
         argument_updates = []
         argument_values = []
         for key in feature['attributes']:
@@ -745,6 +774,12 @@ class FeatureServiceLayer(models.Model):
                         argument_values.append(feature['attributes'][key])
                     else:
                         argument_values.append(datetime.fromtimestamp(feature['attributes'][key] / 1000))
+                elif key in image_fields and feature['attributes'][key]:
+                    image_path = FeatureServiceLayer.create_image_path(self.service.id, primary_key, key)
+                    img_base64_data = FeatureServiceLayer.process_image_data(
+                        feature['attributes'][key], image_path, images_large, images_thumbs
+                    )
+                    argument_values.append(img_base64_data)
                 else:
                     argument_values.append(feature['attributes'][key])
 
@@ -771,6 +806,10 @@ class FeatureServiceLayer(models.Model):
                 )
                 c.execute(set_geom_command, [primary_key])
 
+        # save out large images
+        for key, value in images_large.items():
+            FeatureServiceLayer.save_image(value, image_path, LARGE_IMAGE_NAME)
+
         return primary_key
 
     def delete_feature(self, primary_key):
@@ -783,8 +822,80 @@ class FeatureServiceLayer(models.Model):
         with get_cursor() as c:
             c.execute(delete_command, [primary_key])
 
+        image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+
+        # delete image from s3 storage
+        for col_name in image_fields:
+
+            try:
+                s3_path = '{0}/{1}'.format(
+                    FeatureServiceLayer.create_image_path(self.service.id, primary_key, col_name),
+                    LARGE_IMAGE_NAME
+                )
+
+                if image_storage.exists(s3_path):
+                    image_storage.delete(s3_path)
+
+            except Exception as e:
+                logger.exception(e)
+
         return primary_key
 
+    @staticmethod
+    def create_image_path(service_id, row_id, field_name):
+        file_path = '{0}/{1}/{2}/{3}'.format(
+            FILE_STORE_DOMAIN_NAME,
+            service_id,
+            row_id,
+            field_name
+        )
+        return file_path
+
+    @staticmethod
+    def process_image_data(data, image_path, images_large, images_thumbs):
+
+        # Create large image from base64 string in attributes
+
+        # Remove the 'data:image/jpeg;base64' so the data can be converted to an image...
+        list_lines = data.split(',', 1)
+        image_data = list_lines[1]
+        im = Image.open(BytesIO(base64.b64decode(image_data)))
+        # May want to resize image here in the future...
+        # im = ImageOps.fit(image, (800, 600), Image.ANTIALIAS)
+
+        # Save large image to temporary location
+        images_large[image_path] = im
+
+        # Create and save thumbnail image
+        thumb = ImageOps.fit(im, (64, 64), Image.ANTIALIAS)
+        images_thumbs[image_path] = thumb
+
+        # Convert thumbnail to base64 string and save in database field
+        buffer = BytesIO()
+        thumb.save(buffer, format="JPEG")
+        img_str = 'data:image/jpeg;base64,' + base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        return img_str
+
+    @staticmethod
+    def save_image(img, file_path, file_name):
+
+        # Save out to s3
+        try:
+            s3_path = '{0}/{1}'.format(
+                file_path,
+                file_name
+            )
+
+            # storage_exists = image_storage.exists(s3_path)
+            with image_storage.open(s3_path, 'wb') as fh:
+                buffer = BytesIO()
+                img.save(buffer, format="JPEG")
+                fh.write(buffer.getvalue())
+                img.close()
+
+        except Exception as e:
+            logger.exception(e)
 
 class FeatureServiceLayerRelations(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
@@ -911,7 +1022,8 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
             'ylocation': 'double precision',
             'dropdownedit': 'text',
             'dropdown': 'text',
-            'double': 'double precision'
+            'double': 'double precision',
+            'image': 'text'
         }
         for cell in row:
             create_table_command += ', {field_name} {type} {null}'.format(

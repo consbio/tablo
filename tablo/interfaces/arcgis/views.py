@@ -25,13 +25,16 @@ import time
 
 from django.db.utils import DatabaseError
 from django.core.exceptions import ValidationError
-from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed
+from django.http import HttpResponse, HttpResponseBadRequest, HttpResponseNotAllowed, HttpResponseNotFound
 from django.shortcuts import get_object_or_404
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, View
+from django.conf import settings
 
-from tablo import wkt
+from tablo.storage import default_public_storage as image_storage
+
+from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 from tablo.utils import json_date_serializer
@@ -39,6 +42,11 @@ from tablo.utils import json_date_serializer
 QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
+
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
+
+FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
+
 
 
 class FeatureServiceDetailView(DetailView):
@@ -171,7 +179,7 @@ class FeatureLayerView(View):
 
     def get(self, request, *args, **kwargs):
         self.callback = request.GET.get('callback')
-        return self.handle_request(request, **request.GET.dict())
+        return self.handle_request(request, **request.GET.dict(), **kwargs)
 
     def post(self, request, *args, **kwargs):
         self.callback = request.POST.get('callback')
@@ -661,3 +669,30 @@ def convert_wkt_to_esri_feature(response_items, for_layer):
                 features.append(feature)  # Some related fields have not been appended
 
     return features
+
+
+class ImageView(FeatureLayerView):
+
+    def handle_request(self, request, **kwargs):
+
+        entry_id = kwargs.get('entry_id')
+        col_name = kwargs.get('col_name')
+
+        service_id = self.feature_service_layer.service.id
+
+        # Read from s3
+        s3_path = '{domain}/{service_id}/{entry_id}/{col_name}/{image_name}'.format(
+            domain=FILE_STORE_DOMAIN_NAME,
+            service_id=service_id,
+            entry_id=entry_id,
+            col_name=col_name,
+            image_name=LARGE_IMAGE_NAME
+        )
+
+        if image_storage.exists(s3_path):
+            with image_storage.open(s3_path, 'rb') as fh:
+                return HttpResponse(fh.read(), content_type="image/jpeg")
+        else:
+            return HttpResponseNotFound()
+
+
