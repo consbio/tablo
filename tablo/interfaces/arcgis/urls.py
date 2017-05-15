@@ -1,7 +1,7 @@
 from django.conf.urls import patterns, include, url
 
 from tablo.interfaces.arcgis.views import FeatureServiceDetailView, FeatureServiceLayerDetailView, GenerateRendererView
-from tablo.interfaces.arcgis.views import QueryView, TimeQueryView
+from tablo.interfaces.arcgis.views import QueryView, TimeQueryView, ImageView
 
 urlpatterns = patterns('',
     url(r'rest/services/(?P<service_id>[\w\-@\._]+)/FeatureServer/?', include(patterns('',
@@ -11,6 +11,7 @@ urlpatterns = patterns('',
             url(r'^generateRenderer', GenerateRendererView.as_view(), name='fs_arcgis_generateRenderer'),
             url(r'^query', QueryView.as_view(), name='fs_arcgis_query'),
             url(r'^time-query', TimeQueryView.as_view(), name='fs_arcgis_time_query'),
+            url(r'^image/(?P<entry_id>(\d+))/(?P<col_name>[\w\-]+)/$', ImageView.as_view(), name='fs_arcgis_image_view'),
         )))
     )))
 )
