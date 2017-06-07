@@ -477,20 +477,7 @@ class TemporaryFileResource(ModelResource):
             obj.delete()    # Temporary file has been moved to database, safe to delete
         except Exception as e:
             logger.exception(e)
-            error_msg = ''
-            if hasattr(e, 'message'):
-                error_msg = e.message
-            else:
-                error_msg = str(e)
-
-            print(error_msg)
-            error_code = 'UNKNOWN_ERROR'
-            if 'column' in error_msg and 'specified more than once' in error_msg:
-                error_code = 'DUPLICATE_COLUMN'
-            elif 'transform' in err_msg:
-                error_code = 'TRANSFORM'
-
-            raise ImmediateHttpResponse(HttpBadRequest(error_code))
+            raise ImmediateHttpResponse(HttpBadRequest(self.get_except_error_code(e)))
 
         return self.create_response(request, bundle)
 
@@ -520,9 +507,24 @@ class TemporaryFileResource(ModelResource):
             obj.delete()    # Temporary file has been moved to database, safe to delete
         except InternalError as e:
             logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest('Error deploying file to database.'))
+            raise ImmediateHttpResponse(HttpBadRequest(self.get_except_error_code(e)))
 
         return self.create_response(request, bundle)
+
+    def get_except_error_code(self, e):
+        error_msg = ''
+        if hasattr(e, 'message'):
+            error_msg = e.message
+        else:
+            error_msg = str(e)
+
+        error_code = 'UNKNOWN_ERROR'
+        if 'column' in error_msg and 'specified more than once' in error_msg:
+            error_code = 'DUPLICATE_COLUMN'
+        elif 'transform' in err_msg:
+            error_code = 'TRANSFORM'
+
+        return error_code
 
 
 def json_date_serializer(obj):
