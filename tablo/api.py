@@ -521,7 +521,7 @@ class TemporaryFileResource(ModelResource):
         error_code = 'UNKNOWN_ERROR'
         if 'column' in error_msg and 'specified more than once' in error_msg:
             error_code = 'DUPLICATE_COLUMN'
-        elif 'transform' in err_msg:
+        elif 'transform' in error_msg:
             error_code = 'TRANSFORM'
 
         return error_code
