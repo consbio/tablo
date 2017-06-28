@@ -511,6 +511,7 @@ class TemporaryFileResource(ModelResource):
 
         return self.create_response(request, bundle)
 
+
 def json_date_serializer(obj):
     # Handles date serialization when part of the response object
 
