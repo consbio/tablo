@@ -4,7 +4,6 @@ import re
 
 from django.conf.urls import url
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import InternalError
 from django.http import Http404
 from tastypie import fields
 from tastypie.authentication import MultiAuthentication, SessionAuthentication, ApiKeyAuthentication
@@ -21,6 +20,7 @@ from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureSer
 from tablo.models import add_geometry_column, add_or_update_database_fields
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
 from tablo.models import populate_aggregate_table, populate_data, populate_point_data
+from tablo.utils import get_file_ops_error_code
 
 logger = logging.getLogger(__name__)
 
@@ -477,7 +477,7 @@ class TemporaryFileResource(ModelResource):
             obj.delete()    # Temporary file has been moved to database, safe to delete
         except Exception as e:
             logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest(self.get_except_error_code(e)))
+            raise ImmediateHttpResponse(HttpBadRequest(get_file_ops_error_code(e)))
 
         return self.create_response(request, bundle)
 
@@ -507,25 +507,9 @@ class TemporaryFileResource(ModelResource):
             obj.delete()    # Temporary file has been moved to database, safe to delete
         except Exception as e:
             logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest(self.get_except_error_code(e)))
+            raise ImmediateHttpResponse(HttpBadRequest(get_file_ops_error_code(e)))
 
         return self.create_response(request, bundle)
-
-    def get_except_error_code(self, e):
-        error_msg = ''
-        if hasattr(e, 'message'):
-            error_msg = e.message
-        else:
-            error_msg = str(e)
-
-        error_code = 'UNKNOWN_ERROR'
-        if 'column' in error_msg and 'specified more than once' in error_msg:
-            error_code = 'DUPLICATE_COLUMN'
-        elif 'transform' in error_msg:
-            error_code = 'TRANSFORM'
-
-        return error_code
-
 
 def json_date_serializer(obj):
     # Handles date serialization when part of the response object
