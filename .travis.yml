@@ -1,14 +1,21 @@
 language: python
 python:
     - "3.5"
+addons:
+  postgresql: "9.6"
+
 env:
     - TOXENV=django11
     - TOXENV=coverage
+
+sudo: true  # Allow the sudo command
+
 install:
+    - sudo apt-get install postgresql-9.6-postgis-2.3 postgis -y -q
     - pip install tox
 before_script:
-  - psql -c 'create database tablo;' -U postgres
-  - psql -c 'CREATE EXTENSION postgis;' -U postgres -d tablo
-  - psql -c 'CREATE EXTENSION postgis_topology;' -U postgres -d tablo
+    - psql -c 'create database tablo;' -U postgres
+    - psql -c 'CREATE EXTENSION postgis;' -U postgres -d tablo
+    - psql -c 'CREATE EXTENSION postgis_topology;' -U postgres -d tablo
 script:
     - tox
