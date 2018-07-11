@@ -24,7 +24,7 @@ from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.storage import default_public_storage as image_storage
 
 
-TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'temp')
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
 
 NO_PK = "NO_PK"
