@@ -10,7 +10,7 @@ env:
 sudo: true  # Allow the sudo command
 
 install:
-  - sudo apt-get purge remove postgresql --allow-remove-essential
+  - sudo apt-get purge remove postgresql --force-yes
   - sudo apt-get install postgresql-9.5-postgis-2.2 postgis -y -q
   - pip install tox
 before_script:
