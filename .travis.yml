@@ -7,7 +7,10 @@ addons:
     packages:
       - postgresql-9.6-postgis-2.3
 env:
-  - TOXENV=django11
+  - TOXENV=django18
+  - TOXENV=django19
+  - TOXENV=django110
+  - TOXENV=django111
   - TOXENV=coverage
 
 sudo: true  # Allow the sudo command
