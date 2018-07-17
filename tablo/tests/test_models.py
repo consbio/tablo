@@ -1,10 +1,9 @@
 from collections import OrderedDict
-
 from django.test import TestCase
+from unittest.mock import patch, PropertyMock
 
 from tablo.exceptions import RelatedFieldsError
 from tablo.models import FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations
-from unittest.mock import patch, PropertyMock
 
 
 TABLE_NAME = 'db_table'
