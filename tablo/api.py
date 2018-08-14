@@ -80,8 +80,13 @@ class FeatureServiceResource(ModelResource):
 
     """
 
-    layers = fields.ToManyField('tablo.api.FeatureServiceLayerResource', attribute='featureservicelayer_set',
-        full=True, full_list=False, related_name='service')
+    layers = fields.ToManyField(
+        'tablo.api.FeatureServiceLayerResource',
+        attribute='featureservicelayer_set',
+        related_name='service',
+        full=True,
+        full_list=False
+    )
 
     class Meta:
         object_class = FeatureService
@@ -301,6 +306,7 @@ class FeatureServiceLayerResource(ModelResource):
         filtering = {'layer_order': ALL, 'table': ALL}
         list_allowed_methods = ['get', 'post']
         detail_allowed_methods = ['get', 'post', 'put', 'patch', 'delete']
+        detail_uri_name = 'id'
         serializer = Serializer(formats=['json', 'jsonp'])
         queryset = FeatureServiceLayer.objects.all()
         authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
@@ -450,9 +456,8 @@ class TemporaryFileResource(ModelResource):
         self.is_authenticated(request)
 
         try:
-            dataset_id = kwargs.get('dataset_id')
+            dataset_id = kwargs.pop('dataset_id', None)
 
-            del kwargs['dataset_id']
             bundle = self.build_bundle(request=request)
             obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
 

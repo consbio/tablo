@@ -39,14 +39,15 @@ from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
 from tablo.utils import json_date_serializer
 
-QUERY_LIMIT = 10000
 
 logger = logging.getLogger(__name__)
 
-TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'tmp')
+
+QUERY_LIMIT = 10000
+
+TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'temp')
 
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
-
 
 
 class FeatureServiceDetailView(DetailView):
@@ -99,6 +100,7 @@ class FeatureServiceLayerDetailView(DetailView):
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
         self.callback = request.GET.get('callback')
+
         context = self.get_context_data(object=self.object)
         return self.render_to_response(context)
 
@@ -694,5 +696,3 @@ class ImageView(FeatureLayerView):
                 return HttpResponse(fh.read(), content_type="image/jpeg")
         else:
             return HttpResponseNotFound()
-
-

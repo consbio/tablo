@@ -1,4 +1,3 @@
-import datetime
 import json
 import random
 import string
@@ -113,9 +112,9 @@ class TestCRUD(TestCase):
         num_of_lines = random.randint(1, 10)
         num_of_point = random.randint(2, 10)    # minimum of 2 points are needed for a line
         paths = []
-        for i in range(num_of_lines):
+        for _ in range(num_of_lines):
             path = []
-            for j in range(num_of_point):
+            for _ in range(num_of_point):
                 p = self.generate_random_point()
                 path.append([p['x'], p['y']])
             paths.append(path)
@@ -128,9 +127,9 @@ class TestCRUD(TestCase):
         num_of_polygons = random.randint(1, 10)
         num_of_point = random.randint(3, 10)    # minimum of 3 points are needed for a polygon
         rings = []
-        for i in range(num_of_polygons):
+        for _ in range(num_of_polygons):
             ring = []
-            for j in range(num_of_point):
+            for _ in range(num_of_point):
                 p = self.generate_random_point()
                 ring.append([p['x'], p['y']])
             ring.append(ring[0])
@@ -146,7 +145,7 @@ class TestCRUD(TestCase):
         if is_new_entry:
             fields.update({'db_creator': 'str', 'db_created_date': 'date'})
 
-        for i in range(n):
+        for _ in range(n):
             entry = {'attributes': {}}
             for f, t in fields.items():
                 entry['attributes'][f] = TYPE_RANDOMIZER[t]() if callable(TYPE_RANDOMIZER.get(t)) else t

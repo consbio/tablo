@@ -1,9 +1,8 @@
-
 from django.test import TestCase
-
 from django.db.utils import InternalError
 
 from tablo.utils import get_file_ops_error_code
+
 
 class PerformUtilsTestCase(TestCase):
 

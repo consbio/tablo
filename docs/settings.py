@@ -21,5 +21,4 @@ INSTALLED_APPS = (
     'django.contrib.staticfiles',
     'tastypie',
     'tablo',
-    # 'django_extensions'
 )
