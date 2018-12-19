@@ -18,6 +18,7 @@ from tablo.models import TemporaryFile
 
 
 class TemporaryFileUploadViewBase(View):
+
     @method_decorator(login_required)
     @method_decorator(permission_required('tablo.add_temporaryfile'))
     @method_decorator(csrf_exempt)
@@ -25,20 +26,18 @@ class TemporaryFileUploadViewBase(View):
         return super(TemporaryFileUploadViewBase, self).dispatch(request, *args, **kwargs)
 
     def process_temporary_file(self, tmp_file):
+        """ Truncates the filename if necessary, saves the model, and returns a response """
 
-        """Truncates the filename if necessary, saves the model, and returns a response"""
-
-        #Truncate filename if necessary
+        # Truncate filename if necessary
         if len(tmp_file.filename) > 100:
             base_filename = tmp_file.filename[:tmp_file.filename.rfind(".")]
-            tmp_file.filename = "%s.%s" % (base_filename[:99-len(tmp_file.extension)], tmp_file.extension)
+            tmp_file.filename = "%s.%s" % (
+                base_filename[:99 - len(tmp_file.extension)], tmp_file.extension
+            )
 
         tmp_file.save()
 
-        data = {
-            'uuid': str(tmp_file.uuid)
-        }
-
+        data = {'uuid': str(tmp_file.uuid)}
         response = HttpResponse(json.dumps(data), status=201)
         response['Content-type'] = "text/plain"
 
@@ -60,6 +59,7 @@ class TemporaryFileUploadFormView(FormMixin, TemporaryFileUploadViewBase, Proces
 
 
 class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
+
     @csrf_exempt
     def dispatch(self, request, *args, **kwargs):
         """
@@ -107,13 +107,15 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
         return tmp_file
 
     def get(self, request):
-        if request.GET.get('url'):
-            return self.process_temporary_file(self.download_file(six.moves.urllib.parse.unquote(request.GET.get('url'))))
-        else:
+        if not request.GET.get('url'):
             return HttpResponseBadRequest('Missing URL')
 
+        return self.process_temporary_file(
+            self.download_file(six.moves.urllib.parse.unquote(request.GET.get('url')))
+        )
+
     def post(self, request):
-        if request.POST.get('url'):
-            return self.process_temporary_file(self.download_file(request.POST.get('url')))
-        else:
+        if not request.POST.get('url'):
             return self.get(request)
+
+        return self.process_temporary_file(self.download_file(request.POST.get('url')))

@@ -10,17 +10,19 @@ from messytables.types import CellType
 from itertools import zip_longest
 
 
-POSTGRES_KEYWORDS = ['all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
-                     'asymmetric', 'authorization', 'binary', 'both', 'case', 'cast', 'check', 'collate', 'collation',
-                     'column', 'concurrently', 'constraint', 'create', 'cross', 'current_catalog', 'current_date',
-                     'current_role', 'current_schema', 'current_time', 'current_timestamp', 'current_user', 'default',
-                     'deferrable', 'desc', 'distinct', 'do', 'else', 'end', 'except', 'false', 'fetch', 'for',
-                     'foreign', 'freeze', 'from', 'full', 'grant', 'group', 'having', 'ilike', 'in', 'initially',
-                     'inner', 'intersect', 'into', 'is', 'isnull', 'join', 'leading', 'left', 'limit', 'localtime',
-                     'localtimestamp', 'natural', 'not', 'notnull', 'null', 'offset', 'on', 'only', 'or', 'order',
-                     'outer', 'over', 'overlaps', 'placing', 'primary', 'references', 'returning', 'right', 'select',
-                     'session_user', 'similar', 'some', 'symmetric', 'table', 'then', 'to', 'trailing', 'true',
-                     'union', 'unique', 'user', 'using', 'variadic', 'verbose', 'when', 'where', 'window', 'with']
+POSTGRES_KEYWORDS = [
+    'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
+    'asymmetric', 'authorization', 'binary', 'both', 'case', 'cast', 'check', 'collate', 'collation',
+    'column', 'concurrently', 'constraint', 'create', 'cross', 'current_catalog', 'current_date',
+    'current_role', 'current_schema', 'current_time', 'current_timestamp', 'current_user', 'default',
+    'deferrable', 'desc', 'distinct', 'do', 'else', 'end', 'except', 'false', 'fetch', 'for',
+    'foreign', 'freeze', 'from', 'full', 'grant', 'group', 'having', 'ilike', 'in', 'initially',
+    'inner', 'intersect', 'into', 'is', 'isnull', 'join', 'leading', 'left', 'limit', 'localtime',
+    'localtimestamp', 'natural', 'not', 'notnull', 'null', 'offset', 'on', 'only', 'or', 'order',
+    'outer', 'over', 'overlaps', 'placing', 'primary', 'references', 'returning', 'right', 'select',
+    'session_user', 'similar', 'some', 'symmetric', 'table', 'then', 'to', 'trailing', 'true',
+    'union', 'unique', 'user', 'using', 'variadic', 'verbose', 'when', 'where', 'window', 'with'
+]
 
 X_AND_Y_FIELDS = (
     ('lon', 'lat'),
@@ -43,7 +45,6 @@ def prepare_csv_rows(csv_file, csv_info=None):
     DateType.formats = create_date_formats(day_first=False)
 
     if csv_info:
-        # If we have csv_info, then we know the column types, no need to guess
         types = types_from_config(row_set.sample, csv_info)
     else:
         types = type_guess(row_set.sample, strict=True)
@@ -55,9 +56,10 @@ def prepare_csv_rows(csv_file, csv_info=None):
 
 def types_from_config(rows, csv_info):
     """
-    Determines the type of the columns based on the csvInfo.dataTypes. This allows us to keep from guessing
-    when the sender of the file knows more about the types than we do.
+    Determines the type of the columns based on the csvInfo.dataTypes.
+    This allows us to keep from guessing when the sender of the file knows more about the types than we do.
     """
+
     columns = []
     convert_type = {
         'integer': IntegerType,
@@ -66,14 +68,16 @@ def types_from_config(rows, csv_info):
         'date': DateType,
         'empty': StringType  # Sender doesn't know type either, default to String
     }
+
     for row in rows:
         for cell in row:
             name_index = csv_info['fieldNames'].index(cell.column.lower())
-            type = convert_type[csv_info['dataTypes'][name_index].lower()]
-            if type == DateType:
-                columns.append(type(None))
+            data_type = convert_type[csv_info['dataTypes'][name_index].lower()]
+            if data_type == DateType:
+                columns.append(data_type(None))
             else:
-                columns.append(type())
+                columns.append(data_type())
+
     return columns
 
 
@@ -91,6 +95,7 @@ def convert_header_to_column_name(header):
         converted_header = 'f_' + converted_header
     if converted_header in POSTGRES_KEYWORDS:
         converted_header += '_a'
+
     return converted_header
 
 
@@ -115,24 +120,29 @@ def determine_x_and_y_fields(row):
 
 
 def headers_processor_remove_blank(headers):
-    """ Removes any blank columns from the CSV file. Essentially, if the header is blank, don't add the column
-        value. This prevents issues with blank columns in XLS and XLSX files."""
+    """
+    Removes any blank columns from the CSV file.
+    Essentially, if the header is blank, don't add the column value.
+    This prevents issues with blank columns in XLS and XLSX files.
+    """
 
     def apply_headers(row_set, row):
         _row = []
         pairs = zip_longest(row, headers)
-        for i, (cell, header) in enumerate(pairs):
+        for _, (cell, header) in enumerate(pairs):
             if cell is None:
                 cell = Cell(None)
             cell.column = header
             if cell.column:
                 _row.append(cell)
         return _row
+
     return apply_headers
 
 
 class EmptyType(CellType):
     """ An empty cell """
+
     result_type = unicode_string
     guessing_weight = 0
 
@@ -146,49 +156,51 @@ class EmptyType(CellType):
         except UnicodeEncodeError:
             return str(value)
 
-# We are never wanting boolean types, so remove that from the default list
-TYPES = [EmptyType, StringType, DecimalType, IntegerType, DateType]
+
+# We never want Boolean types, so exclude it from the defaults
+TYPES = (EmptyType, StringType, DecimalType, IntegerType, DateType)
 
 
 def type_guess(rows, types=TYPES, strict=False):
     """
-    This is a modified version of the messyTables type_guess function. The modified version uses the EmptyType 
-    to signify that the field itself is empty. This allows us to differentitate between a field that had some String
-    values and a field that had no values.
-    
-    The type guesser aggregates the number of successful conversions of each column to each type, weights them by a
-    fixed type priority and select the most probable type for each column based on that figure. It returns a list of
-    ``CellType``. Empty cells are ignored.
+    This is a modified version of the messyTables type_guess function.
+    The modified version uses the EmptyType to signify that the field itself is empty.
+    This allows us to differentitate between a field that had some String values and a field that had no values.
+
+    The type guesser aggregates the number of successful conversions of each column to each type,
+    weights them by a fixed type priority and selects the most probable type for each column based on that figure.
+    It returns a list of ``CellType``. Empty cells are ignored.
 
     Strict means that a type will not be guessed if parsing fails for a single cell in the column.
     """
 
-    guesses = []
     type_instances = [i for t in types for i in t.instances()]
+    guesses = []
+
     if strict:
         at_least_one_value = []
-        for ri, row in enumerate(rows):
+        for _, row in enumerate(rows):
             diff = len(row) - len(guesses)
             for _ in range(diff):
                 typesdict = {}
-                for type in type_instances:
-                    typesdict[type] = 0
+                for data_type in type_instances:
+                    typesdict[data_type] = 0
                 guesses.append(typesdict)
                 at_least_one_value.append(False)
             for ci, cell in enumerate(row):
                 if not cell.value:
                     continue
                 at_least_one_value[ci] = True
-                for type in list(guesses[ci].keys()):
-                    if not type.test(cell.value):
-                        guesses[ci].pop(type)
+                for data_type in list(guesses[ci].keys()):
+                    if not data_type.test(cell.value):
+                        guesses[ci].pop(data_type)
         # no need to set guessing weights before this
-        # because we only accept a type if it never fails
+        # because we only accept a data_type if it never fails
         for i, guess in enumerate(guesses):
-            for type in guess:
-                guesses[i][type] = type.guessing_weight
+            for data_type in guess:
+                guesses[i][data_type] = data_type.guessing_weight
         # in case there were no values at all in the column,
-        # we set the guessed type to empty
+        # we set the guessed data_type to empty
         for i, v in enumerate(at_least_one_value):
             if not v:
                 guesses[i] = {EmptyType(): 0}
@@ -202,15 +214,16 @@ def type_guess(rows, types=TYPES, strict=False):
                 guesses[i][EmptyType()] = guesses[i].get(EmptyType(), 0)
                 if not cell.value:
                     continue
-                for type in type_instances:
-                    if type.test(cell.value):
-                        guesses[i][type] += type.guessing_weight
-    _columns = []
+                for data_type in type_instances:
+                    if data_type.test(cell.value):
+                        guesses[i][data_type] += data_type.guessing_weight
+    columns = []
     for guess in guesses:
         # this first creates an array of tuples because we want the types to be
         # sorted. Even though it is not specified, python chooses the first
         # element in case of a tie
         # See: http://stackoverflow.com/a/6783101/214950
         guesses_tuples = [(t, guess[t]) for t in type_instances if t in guess]
-        _columns.append(max(guesses_tuples, key=lambda t_n: t_n[1])[0])
-    return _columns
+        columns.append(max(guesses_tuples, key=lambda t_n: t_n[1])[0])
+
+    return columns

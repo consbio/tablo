@@ -153,7 +153,7 @@ class FeatureServiceLayerDetailView(DetailView):
 
 
 class FeatureLayerView(View):
-    """Base view for map service requests"""
+    """ Base view for map service requests """
 
     http_method_names = ['get', 'post', 'head', 'options']
 
@@ -164,7 +164,7 @@ class FeatureLayerView(View):
         super(FeatureLayerView, self).__init__(*args, **kwargs)
 
     def handle_request(self, request, **kwargs):
-        """This method is called in response to either a GET or POST with GET or POST data respectively"""
+        """ This method is called in response to either a GET or POST with GET or POST data respectively """
 
         raise NotImplementedError
 
