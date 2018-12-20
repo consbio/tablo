@@ -116,19 +116,3 @@ def json_date_serializer(obj):
         serial = obj.isoformat()
         return serial
     return json.JSONEncoder.default(obj)
-
-
-def get_file_ops_error_code(e):
-    error_msg = ''
-    if hasattr(e, 'message'):
-        error_msg = e.message
-    else:
-        error_msg = str(e)
-
-    error_code = 'UNKNOWN_ERROR'
-    if 'column' in error_msg and 'specified more than once' in error_msg:
-        error_code = 'DUPLICATE_COLUMN'
-    elif 'transform' in error_msg:
-        error_code = 'TRANSFORM'
-
-    return error_code

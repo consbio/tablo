@@ -19,7 +19,8 @@ from django.db.utils import DataError
 from django.utils.datastructures import OrderedSet
 
 from tablo import wkt, LARGE_IMAGE_NAME
-from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
+from tablo.csv_utils import name_for_type
+from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError, QueryExecutionError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, dictfetchall
 from tablo.storage import default_public_storage as image_storage
@@ -164,7 +165,7 @@ class FeatureServiceLayer(models.Model):
             return '[]'
 
         # TODO: Remove fields from database if we really don't want to continue using them
-        return self._get_time_extent()
+        return json.dumps(self.get_raw_time_extent())
 
     def get_raw_time_extent(self):
         query = 'SELECT MIN({date_field}), MAX({date_field}) FROM {table_name}'.format(
@@ -178,19 +179,17 @@ class FeatureServiceLayer(models.Model):
 
         return [min_date, max_date]
 
-    def _get_time_extent(self):
-        return json.dumps(self.get_raw_time_extent())
-
     @property
     def fields(self):
         if self._fields is None:
-
             fields = get_fields(self.table)
+
             for field in fields:
                 if field['name'] == 'db_id':
                     field['type'] = 'esriFieldTypeOID'
                 elif field['name'] == GEOM_FIELD_NAME:
                     field['type'] = 'esriFieldTypeGeometry'
+
             self._fields = fields
 
         return self._fields
@@ -811,7 +810,7 @@ class FeatureServiceLayer(models.Model):
 
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
 
-        # Delete image from s3 storage
+        # Delete image from S3 storage
         for col_name in image_fields:
 
             try:
@@ -866,14 +865,9 @@ class FeatureServiceLayer(models.Model):
     @staticmethod
     def save_image(img, file_path, file_name):
 
-        # Save out to s3
         try:
-            s3_path = '{0}/{1}'.format(
-                file_path,
-                file_name
-            )
+            s3_path = '{0}/{1}'.format(file_path, file_name)
 
-            # storage_exists = image_storage.exists(s3_path)
             with image_storage.open(s3_path, 'wb') as fh:
                 buffer = BytesIO()
                 img.save(buffer, format="JPEG")
@@ -1190,6 +1184,8 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
 
         current_columns = [column for column in columns if column.column.lower() in colnames_in_table]
 
+        # Data has already been successfully imported: no need for robust error handling
+
         insert_command = (
             'INSERT INTO {table_name} ({definition_fields} {source_dataset}, {spatial_field}) '
             'SELECT {definition_fields} {dataset_id}, {spatial_field} FROM {dataset_table}'
@@ -1202,7 +1198,6 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             spatial_field=GEOM_FIELD_NAME
         )
 
-        logger.debug(insert_command)
         all_commands.append(insert_command)
 
     with connection.cursor() as c:
@@ -1211,9 +1206,10 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
 
 
 def populate_data(table_name, row_set):
-    first_row = next(row_set.sample)
+    header = next(row_set.sample)
+
     field_list = '{field_list}'.format(
-        field_list=','.join([cell.column for cell in first_row])
+        field_list=','.join([cell.column for cell in header])
     )
     insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
         table_name=table_name,
@@ -1221,18 +1217,34 @@ def populate_data(table_name, row_set):
     )
 
     with connection.cursor() as c:
-        header_skipped = False
-        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
+        values_format = '({template})'.format(template=','.join(['%s' for _ in header]))
         values_list = []
+
+        header_skipped = False
+        last_row = header
+
         for row in row_set:
             if not header_skipped:
                 header_skipped = True
                 continue
+
             all_values = [cell.value for cell in row]
-            individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
+            individual_insert_command = c.mogrify(values_format, all_values).decode('utf-8')
             values_list.append(individual_insert_command)
 
-        c.execute(insert_command + ','.join(values_list))
+            last_row = row
+
+        # Data coming in from uploaded file: implement error handling with sufficient info to address issues
+
+        values_clause = ',\n'.join(values_list)
+
+        try:
+            c.execute(insert_command + '\n' + values_clause)
+        except DataError as ex:
+            raise QueryExecutionError(
+                underlying=ex,
+                fields=['{col} ({type})'.format(col=r.column, type=name_for_type(r)) for r in last_row]
+            )
 
 
 def populate_point_data(pk, csv_info, is_import=True):
@@ -1262,6 +1274,7 @@ def populate_point_data(pk, csv_info, is_import=True):
         field_name=GEOM_FIELD_NAME,
     )
 
+    # Data has already been proven by populate_data: no need for robust error handling
     with connection.cursor() as c:
         c.execute(update_command)
         c.execute(clear_null_command)
