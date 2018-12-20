@@ -16,7 +16,7 @@ from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
 from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows
-from tablo.exceptions import derive_error_response_data
+from tablo.exceptions import derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
 from tablo.models import add_geometry_column, add_or_update_database_fields
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
@@ -405,11 +405,26 @@ class TemporaryFileResource(ModelResource):
         if obj.extension == 'csv':
             csv_file_name = obj.file.name
         else:
-            raise ImmediateHttpResponse(HttpBadRequest('Unsupported file format.'))
+            error_json = derive_error_response_data(InvalidFileError(
+                underlying='Unsupported file format', extension=obj.extension
+            ))
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(error_json),
+                content_type='application/json'
+            ))
 
-        row_set = prepare_csv_rows(obj.file)
+        try:
+            row_set = prepare_csv_rows(obj.file)
+            sample_row = next(row_set.sample)
+        except StopIteration as e:
+            error_json = derive_error_response_data(InvalidFileError(
+                underlying=e, lines=0
+            ))
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(error_json),
+                content_type='application/json'
+            ))
 
-        sample_row = next(row_set.sample)
         bundle.data['fieldNames'] = [cell.column for cell in sample_row]
         bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
         bundle.data['optionalFields'] = determine_optional_fields(row_set)

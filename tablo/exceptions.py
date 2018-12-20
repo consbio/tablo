@@ -8,6 +8,16 @@ TRANSFORM = 'TRANSFORM'
 UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 
 
+class InvalidFileError(ValidationError):
+    """ An error with a CSV that can be caught before execution """
+
+    def __init__(self, underlying, lines=-1, extension=None):
+        self.message = getattr(underlying, 'message', str(underlying))
+        self.file_info = {'lines': lines, 'extension': extension}
+
+        super(InvalidFileError, self).__init__(self.message)
+
+
 class InvalidSQLError(ValidationError):
     """ A database error that should be caught before execution """
 
@@ -35,20 +45,27 @@ class QueryExecutionError(DataError, ValueError):
 
 
 def derive_error_response_data(e):
-    """ Inspects postgres error message to derive error codes and info """
+    """ Inspects error message to derive error codes and info """
 
     error_msg = getattr(e, 'message', str(e))
     error_json = {'error_code': UNKNOWN_ERROR}
 
+    if getattr(e, 'fields', None):
+        error_json['field_info'] = e.fields
+    if getattr(e, 'file_info', None):
+        error_json['file_info'] = e.file_info
+
     if 'transform' in error_msg:
         error_json['error_code'] = TRANSFORM
+
     elif 'column' in error_msg and 'specified more than once' in error_msg:
         error_json['error_code'] = DUPLICATE_COLUMN
-    elif 'invalid input syntax' in error_msg:
+
+    elif isinstance(e, InvalidFileError):
         error_json['error_code'] = BAD_DATA
 
-        if getattr(e, 'fields', None):
-            error_json['field_info'] = e.fields
+    elif 'invalid input syntax' in error_msg:
+        error_json['error_code'] = BAD_DATA
 
         try:
             line_marker = '\nLINE '
