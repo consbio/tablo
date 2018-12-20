@@ -1,21 +1,22 @@
+import base64
 import calendar
 import json
 import logging
 import re
-import uuid
 import sqlparse
-import base64
+import uuid
 
 from collections import OrderedDict
 from datetime import datetime
+from io import BytesIO
+from PIL import Image, ImageOps
+from sqlparse.tokens import Token
+
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
+from django.db.utils import DataError
 from django.utils.datastructures import OrderedSet
-from sqlparse.tokens import Token
-
-from PIL import Image, ImageOps
-from io import BytesIO
 
 from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
@@ -62,32 +63,6 @@ ADJUSTED_GLOBAL_EXTENT = Extent({
 })
 
 logger = logging.getLogger(__name__)
-
-
-def get_fields(for_table):
-    fields = []
-    with connection.cursor() as c:
-        c.execute(
-            ' '.join((
-                'SELECT column_name, is_nullable, data_type',
-                'FROM information_schema.columns',
-                'WHERE table_name = %s',
-                'ORDER BY ordinal_position;'
-            )),
-            [for_table]
-        )
-        # c.description won't be populated without first running the query above
-        for field_info in c.fetchall():
-            field_type = field_info[2]
-            fields.append({
-                'name': field_info[0],
-                'alias': field_info[0],
-                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
-                'nullable': True if field_info[1] == 'YES' else False,
-                'editable': True
-            })
-
-    return fields
 
 
 class FeatureService(models.Model):
@@ -197,7 +172,7 @@ class FeatureServiceLayer(models.Model):
             table_name=self.table
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(query)
             min_date, max_date = (calendar.timegm(x.timetuple()) * 1000 for x in c.fetchone())
 
@@ -315,7 +290,7 @@ class FeatureServiceLayer(models.Model):
 
         # Execute query with optional limit and offset, and prepare return data
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(query_clause, query_params)
             queried_data = dictfetchall(c)
 
@@ -537,7 +512,7 @@ class FeatureServiceLayer(models.Model):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'
         time_query = time_query.format(geom_field=GEOM_FIELD_NAME, table=self.table)
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(time_query)
             response = dictfetchall(c)
 
@@ -554,7 +529,7 @@ class FeatureServiceLayer(models.Model):
             relationship_name, field_name = field.split('.')
             table = self.relations.filter(related_title=relationship_name).first().table
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT distinct {field_name} FROM {table} ORDER BY {field_name}'.format(
                 table=table, field_name=field_name
             ))
@@ -568,7 +543,7 @@ class FeatureServiceLayer(models.Model):
 
         breaks = []
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT MIN({field_name}), MAX({field_name}) FROM {table}'.format(
                 table=self.table, field_name=field
             ))
@@ -608,7 +583,7 @@ class FeatureServiceLayer(models.Model):
 
         values = []
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT MIN({field_name}), MAX({field_name}) FROM {table}'.format(
                 table=self.table,
                 field_name=field
@@ -655,7 +630,7 @@ class FeatureServiceLayer(models.Model):
             ORDER BY service_table.{field}
         """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(sql_statement)
             values = [row[0] for row in c.fetchall()]
 
@@ -672,7 +647,7 @@ class FeatureServiceLayer(models.Model):
     def add_feature(self, feature):
 
         system_cols = {PRIMARY_KEY_NAME, GEOM_FIELD_NAME}
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
@@ -739,7 +714,7 @@ class FeatureServiceLayer(models.Model):
             else:
                 values.append(feature['attributes'][attribute_name])
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
             c.execute(set_geom_command, [primary_key])
@@ -752,7 +727,7 @@ class FeatureServiceLayer(models.Model):
 
     def update_feature(self, feature):
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
@@ -802,7 +777,7 @@ class FeatureServiceLayer(models.Model):
             pk=PRIMARY_KEY_NAME
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(update_command, argument_values)
 
             if feature.get('geometry'):
@@ -831,7 +806,7 @@ class FeatureServiceLayer(models.Model):
             pk=PRIMARY_KEY_NAME
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(delete_command, [primary_key])
 
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
@@ -937,18 +912,52 @@ class FeatureServiceLayerRelations(models.Model):
         return '{table}_{index}'.format(table=self.layer.table, index=self.related_index)
 
 
+class TemporaryFile(models.Model):
+    """ A temporary file upload """
+
+    uuid = models.CharField(max_length=36, default=uuid.uuid4)
+    date = models.DateTimeField(auto_now_add=True)
+    filename = models.CharField(max_length=100)
+    filesize = models.BigIntegerField()
+    file = models.FileField(upload_to=TEMPORARY_FILE_LOCATION, max_length=1024)
+
+    @property
+    def extension(self):
+        if '.' not in self.filename:
+            return ''
+        return self.filename[self.filename.rfind('.') + 1:]
+
+
 def delete_data_table(sender, instance, **kwargs):
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute('DROP table IF EXISTS {table_name}'.format(table_name=instance.table))
 
 
 signals.pre_delete.connect(delete_data_table, sender=FeatureServiceLayer)
 
 
-def sequence_exists(sequence_name):
-    with get_cursor() as c:
-        c.execute('SELECT 1 FROM pg_class WHERE relname=%s', (sequence_name,))
-        return bool(c.fetchone())
+def determine_extent(table):
+
+    try:
+        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
+            field_name=GEOM_FIELD_NAME,
+            table_name=table
+        )
+
+        with connection.cursor() as c:
+            c.execute(query)
+            extent_box = c.fetchone()[0]
+            if extent_box:
+                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
+            else:
+                extent = ADJUSTED_GLOBAL_EXTENT
+
+    except DatabaseError:
+        logger.exception('Error generating extent for table {0}, returning adjusted global extent'.format(table))
+        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
+        extent = ADJUSTED_GLOBAL_EXTENT
+
+    return extent.as_dict()
 
 
 def copy_data_table_for_import(dataset_id):
@@ -1003,7 +1012,7 @@ def copy_data_table_for_import(dataset_id):
         column_name=GEOM_FIELD_NAME
     )
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute(drop_table_command)
         c.execute(copy_table_command)
         c.execute(create_sequence_command)
@@ -1013,6 +1022,27 @@ def copy_data_table_for_import(dataset_id):
         c.execute(index_command)
 
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+
+
+def sequence_exists(sequence_name):
+    with connection.cursor() as c:
+        c.execute('SELECT 1 FROM pg_class WHERE relname=%s', (sequence_name,))
+        return bool(c.fetchone())
+
+
+class Column(object):
+    """ Helper for table creation """
+
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
+
+
+def create_aggregate_database_table(row, dataset_id):
+    row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
+    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
+    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
+    row.pop()  # remove the appended column
+    return table_name
 
 
 def create_database_table(row, dataset_id, append=False, optional_fields=None):
@@ -1047,7 +1077,7 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
         create_table_command += ');'
 
         try:
-            with get_cursor() as c:
+            with connection.cursor() as c:
                 c.execute(drop_table_command)
                 c.execute(create_table_command)
         except DatabaseError:
@@ -1056,12 +1086,94 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
     return table_name
 
 
-def create_aggregate_database_table(row, dataset_id):
-    row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
-    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
-    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
-    row.pop()  # remove the appended column
-    return table_name
+def add_or_update_database_fields(table_name, fields):
+
+    check_command = (
+        'SELECT EXISTS('
+        '    SELECT column_name FROM information_schema.columns '
+        '    WHERE table_name=%s and column_name=%s'
+        ')'
+    )
+
+    for field in fields:
+        alter_commands = []
+        db_type = field.get('type')
+        column_name = field.get('name')
+        required = field.get('required', False)
+        value = field.get('value')
+
+        with connection.cursor() as c:
+            c.execute(check_command, (table_name, column_name))
+            column_exists = c.fetchone()[0]
+
+        if column_exists:
+            set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
+                table_name=table_name,
+                column_name=column_name,
+                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
+            )
+            alter_commands.append(set_default_command)
+
+        else:
+            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {value}'.format(
+                table_name=table_name,
+                column_name=column_name,
+                column_type=db_type + (' NOT NULL' if required else ''),
+                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
+            )
+            alter_commands.append(alter_command)
+
+        with connection.cursor() as c:
+            for command in alter_commands:
+                c.execute(command)
+
+
+def add_geometry_column(dataset_id, is_import=True):
+
+    with connection.cursor() as c:
+        add_command = (
+            "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
+        ).format(
+            schema='public',
+            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
+            column_name=GEOM_FIELD_NAME,
+            srid=WEB_MERCATOR_SRID,
+            type='GEOMETRY',
+            dimension=2
+        )
+        c.execute(add_command)
+
+        index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
+            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
+            column_name=GEOM_FIELD_NAME
+        )
+        c.execute(index_command)
+
+
+def get_fields(for_table):
+    fields = []
+    with connection.cursor() as c:
+        c.execute(
+            ' '.join((
+                'SELECT column_name, is_nullable, data_type',
+                'FROM information_schema.columns',
+                'WHERE table_name = %s',
+                'ORDER BY ordinal_position;'
+            )),
+            [for_table]
+        )
+        # c.description won't be populated without first running the query above
+        for field_info in c.fetchall():
+            field_type = field_info[2]
+            fields.append({
+                'name': field_info[0],
+                'alias': field_info[0],
+                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
+                'nullable': True if field_info[1] == 'YES' else False,
+                'editable': True
+            })
+
+    return fields
 
 
 def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_combine):
@@ -1070,7 +1182,7 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
     all_commands = [delete_command]
     for dataset_id in datasets_ids_to_combine:
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT * from {table_name} LIMIT 0'.format(
                 table_name=TABLE_NAME_PREFIX + dataset_id
             ))
@@ -1093,7 +1205,7 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
         logger.debug(insert_command)
         all_commands.append(insert_command)
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         for command in all_commands:
             c.execute(command)
 
@@ -1108,7 +1220,7 @@ def populate_data(table_name, row_set):
         field_list=field_list
     )
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         header_skipped = False
         values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
         values_list = []
@@ -1121,70 +1233,6 @@ def populate_data(table_name, row_set):
             values_list.append(individual_insert_command)
 
         c.execute(insert_command + ','.join(values_list))
-
-
-def add_or_update_database_fields(table_name, fields):
-
-    check_command = (
-        'SELECT EXISTS('
-        '    SELECT column_name FROM information_schema.columns '
-        '    WHERE table_name=%s and column_name=%s'
-        ')'
-    )
-
-    for field in fields:
-        alter_commands = []
-        db_type = field.get('type')
-        column_name = field.get('name')
-        required = field.get('required', False)
-        value = field.get('value')
-
-        with get_cursor() as c:
-            c.execute(check_command, (table_name, column_name))
-            column_exists = c.fetchone()[0]
-
-        if column_exists:
-            set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
-                table_name=table_name,
-                column_name=column_name,
-                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
-            )
-            alter_commands.append(set_default_command)
-
-        else:
-            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {value}'.format(
-                table_name=table_name,
-                column_name=column_name,
-                column_type=db_type + (' NOT NULL' if required else ''),
-                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
-            )
-            alter_commands.append(alter_command)
-
-        with get_cursor() as c:
-            for command in alter_commands:
-                c.execute(command)
-
-
-def add_geometry_column(dataset_id, is_import=True):
-
-    with get_cursor() as c:
-        add_command = (
-            "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
-        ).format(
-            schema='public',
-            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=GEOM_FIELD_NAME,
-            srid=WEB_MERCATOR_SRID,
-            type='GEOMETRY',
-            dimension=2
-        )
-        c.execute(add_command)
-
-        index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
-            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=GEOM_FIELD_NAME
-        )
-        c.execute(index_command)
 
 
 def populate_point_data(pk, csv_info, is_import=True):
@@ -1214,55 +1262,6 @@ def populate_point_data(pk, csv_info, is_import=True):
         field_name=GEOM_FIELD_NAME,
     )
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute(update_command)
         c.execute(clear_null_command)
-
-
-def determine_extent(table):
-
-    try:
-        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
-            field_name=GEOM_FIELD_NAME,
-            table_name=table
-        )
-
-        with get_cursor() as c:
-            c.execute(query)
-            extent_box = c.fetchone()[0]
-            if extent_box:
-                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
-            else:
-                extent = ADJUSTED_GLOBAL_EXTENT
-
-    except DatabaseError:
-        logger.exception('Error generating extent for table {0}, returning adjusted global extent'.format(table))
-        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
-        extent = ADJUSTED_GLOBAL_EXTENT
-
-    return extent.as_dict()
-
-
-def get_cursor():
-    return connection.cursor()
-
-
-class Column(object):
-    def __init__(self, **entries):
-        self.__dict__.update(entries)
-
-
-class TemporaryFile(models.Model):
-    """ A temporary file upload """
-
-    uuid = models.CharField(max_length=36, default=uuid.uuid4)
-    date = models.DateTimeField(auto_now_add=True)
-    filename = models.CharField(max_length=100)
-    filesize = models.BigIntegerField()
-    file = models.FileField(upload_to=TEMPORARY_FILE_LOCATION, max_length=1024)
-
-    @property
-    def extension(self):
-        if '.' not in self.filename:
-            return ''
-        return self.filename[self.filename.rfind('.') + 1:]
