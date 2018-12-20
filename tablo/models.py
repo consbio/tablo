@@ -1,21 +1,22 @@
+import base64
 import calendar
 import json
 import logging
 import re
-import uuid
 import sqlparse
-import base64
+import uuid
 
 from collections import OrderedDict
 from datetime import datetime
+from io import BytesIO
+from PIL import Image, ImageOps
+from sqlparse.tokens import Token
+
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
+from django.db.utils import DataError
 from django.utils.datastructures import OrderedSet
-from sqlparse.tokens import Token
-
-from PIL import Image, ImageOps
-from io import BytesIO
 
 from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
@@ -27,7 +28,7 @@ from tablo.storage import default_public_storage as image_storage
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'temp')
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
 
-NO_PK = "NO_PK"
+NO_PK = 'NO_PK'
 
 
 POSTGIS_ESRI_FIELD_MAPPING = {
@@ -62,32 +63,6 @@ ADJUSTED_GLOBAL_EXTENT = Extent({
 })
 
 logger = logging.getLogger(__name__)
-
-
-def get_fields(for_table):
-    fields = []
-    with connection.cursor() as c:
-        c.execute(
-            ' '.join((
-                'SELECT column_name, is_nullable, data_type',
-                'FROM information_schema.columns',
-                'WHERE table_name = %s',
-                'ORDER BY ordinal_position;'
-            )),
-            [for_table]
-        )
-        # c.description won't be populated without first running the query above
-        for field_info in c.fetchall():
-            field_type = field_info[2]
-            fields.append({
-                'name': field_info[0],
-                'alias': field_info[0],
-                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
-                'nullable': True if field_info[1] == 'YES' else False,
-                'editable': True
-            })
-
-    return fields
 
 
 class FeatureService(models.Model):
@@ -197,7 +172,7 @@ class FeatureServiceLayer(models.Model):
             table_name=self.table
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(query)
             min_date, max_date = (calendar.timegm(x.timetuple()) * 1000 for x in c.fetchone())
 
@@ -315,7 +290,7 @@ class FeatureServiceLayer(models.Model):
 
         # Execute query with optional limit and offset, and prepare return data
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(query_clause, query_params)
             queried_data = dictfetchall(c)
 
@@ -537,7 +512,7 @@ class FeatureServiceLayer(models.Model):
         time_query = 'SELECT DISTINCT ST_AsText({geom_field}), COUNT(0) FROM {table} GROUP BY ST_AsText({geom_field})'
         time_query = time_query.format(geom_field=GEOM_FIELD_NAME, table=self.table)
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(time_query)
             response = dictfetchall(c)
 
@@ -554,7 +529,7 @@ class FeatureServiceLayer(models.Model):
             relationship_name, field_name = field.split('.')
             table = self.relations.filter(related_title=relationship_name).first().table
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT distinct {field_name} FROM {table} ORDER BY {field_name}'.format(
                 table=table, field_name=field_name
             ))
@@ -568,7 +543,7 @@ class FeatureServiceLayer(models.Model):
 
         breaks = []
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT MIN({field_name}), MAX({field_name}) FROM {table}'.format(
                 table=self.table, field_name=field
             ))
@@ -576,7 +551,7 @@ class FeatureServiceLayer(models.Model):
 
         step = (max_value - min_value) / break_count
         low_value = min_value
-        for i in range(break_count):
+        for _ in range(break_count):
             breaks.append(low_value)
             low_value += step
 
@@ -608,7 +583,7 @@ class FeatureServiceLayer(models.Model):
 
         values = []
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT MIN({field_name}), MAX({field_name}) FROM {table}'.format(
                 table=self.table,
                 field_name=field
@@ -655,7 +630,7 @@ class FeatureServiceLayer(models.Model):
             ORDER BY service_table.{field}
         """.format(field=field, primary_key=self.object_id_field, table=self.table, num_samples=1000)
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(sql_statement)
             values = [row[0] for row in c.fetchall()]
 
@@ -672,7 +647,7 @@ class FeatureServiceLayer(models.Model):
     def add_feature(self, feature):
 
         system_cols = {PRIMARY_KEY_NAME, GEOM_FIELD_NAME}
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
@@ -693,27 +668,35 @@ class FeatureServiceLayer(models.Model):
         if len(columns_not_present):
             raise AttributeError('Missing attributes {0}'.format(','.join(columns_not_present)))
 
-        insert_command = 'INSERT INTO {dataset_table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {primary_key}'.format(
-            dataset_table_name=self.table,
-            attribute_names=','.join(colnames_in_table),
-            placeholders=','.join(['%s'] * len(colnames_in_table)),
-            primary_key=PRIMARY_KEY_NAME
+        insert_command = (
+            'INSERT INTO {table_name} ({attribute_names}) VALUES ({placeholders}) RETURNING {pk}'.format(
+                table_name=self.table,
+                attribute_names=','.join(colnames_in_table),
+                placeholders=','.join(['%s'] * len(colnames_in_table)),
+                pk=PRIMARY_KEY_NAME
+            )
         )
 
-        set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
-            dataset_table_name=self.table,
-            geom_column=GEOM_FIELD_NAME,
+        transform_op = 'ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid})'.format(
             geom=wkt.from_esri_feature(feature['geometry'], self.geometry_type),
-            table_srid=self.srid,
-            primary_key=PRIMARY_KEY_NAME
+            table_srid=self.srid
+        )
+        set_geom_command = 'UPDATE {table_name} SET {geom_column} = {transform_op} WHERE {pk}=%s'.format(
+            table_name=self.table,
+            geom_column=GEOM_FIELD_NAME,
+            transform_op=transform_op,
+            pk=PRIMARY_KEY_NAME
         )
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+
         # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
+
         images_large = {}
         images_thumbs = {}
         values = []
+
         for attribute_name in colnames_in_table:
             if attribute_name in date_fields and feature['attributes'][attribute_name]:
                 if isinstance(feature['attributes'][attribute_name], str):
@@ -731,7 +714,7 @@ class FeatureServiceLayer(models.Model):
             else:
                 values.append(feature['attributes'][attribute_name])
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(insert_command, values)
             primary_key = c.fetchone()[0]
             c.execute(set_geom_command, [primary_key])
@@ -744,7 +727,7 @@ class FeatureServiceLayer(models.Model):
 
     def update_feature(self, feature):
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
                 dataset_table_name=self.table
             ))
@@ -757,11 +740,14 @@ class FeatureServiceLayer(models.Model):
 
         date_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeDate']
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
+
         # Creating a dictionary where the key is the Amazon S3 path and the value is the Image for the field
+
         images_large = {}
         images_thumbs = {}
         argument_updates = []
         argument_values = []
+
         for key in feature['attributes']:
             if key == PRIMARY_KEY_NAME:
                 continue
@@ -784,29 +770,30 @@ class FeatureServiceLayer(models.Model):
                     argument_values.append(feature['attributes'][key])
 
         argument_values.append(feature['attributes'][PRIMARY_KEY_NAME])
-        update_command = (
-            'UPDATE {dataset_table_name}'
-            ' SET {set_portion}'
-            ' WHERE {primary_key}=%s'
-        ).format(
-            dataset_table_name=self.table,
+
+        update_command = 'UPDATE {table_name} SET {set_portion} WHERE {pk}=%s'.format(
+            table_name=self.table,
             set_portion=','.join(argument_updates),
-            primary_key=PRIMARY_KEY_NAME
+            pk=PRIMARY_KEY_NAME
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(update_command, argument_values)
+
             if feature.get('geometry'):
-                set_geom_command = 'UPDATE {dataset_table_name} SET {geom_column} = ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid}) WHERE {primary_key}=%s'.format(
-                    dataset_table_name=self.table,
-                    geom_column=GEOM_FIELD_NAME,
+                transform_op = 'ST_Transform(ST_GeomFromEWKT(\'{geom}\'), {table_srid})'.format(
                     geom=wkt.from_esri_feature(feature['geometry'], self.geometry_type),
-                    table_srid=self.srid,
-                    primary_key=PRIMARY_KEY_NAME
+                    table_srid=self.srid
+                )
+                set_geom_command = 'UPDATE {table_name} SET {geom_column} = {transform_op} WHERE {pk}=%s'.format(
+                    table_name=self.table,
+                    geom_column=GEOM_FIELD_NAME,
+                    transform_op=transform_op,
+                    pk=PRIMARY_KEY_NAME
                 )
                 c.execute(set_geom_command, [primary_key])
 
-        # save out large images
+        # Save out large images
         for key, value in images_large.items():
             FeatureServiceLayer.save_image(value, image_path, LARGE_IMAGE_NAME)
 
@@ -814,17 +801,17 @@ class FeatureServiceLayer(models.Model):
 
     def delete_feature(self, primary_key):
 
-        delete_command = 'DELETE FROM {table_name} WHERE {primary_key}=%s'.format(
+        delete_command = 'DELETE FROM {table_name} WHERE {pk}=%s'.format(
             table_name=self.table,
-            primary_key=PRIMARY_KEY_NAME
+            pk=PRIMARY_KEY_NAME
         )
 
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(delete_command, [primary_key])
 
         image_fields = [field['name'] for field in self.fields if field['type'] == 'esriFieldTypeBlob']
 
-        # delete image from s3 storage
+        # Delete image from s3 storage
         for col_name in image_fields:
 
             try:
@@ -832,7 +819,6 @@ class FeatureServiceLayer(models.Model):
                     FeatureServiceLayer.create_image_path(self.service.id, primary_key, col_name),
                     LARGE_IMAGE_NAME
                 )
-
                 if image_storage.exists(s3_path):
                     image_storage.delete(s3_path)
 
@@ -897,6 +883,7 @@ class FeatureServiceLayer(models.Model):
         except Exception as e:
             logger.exception(e)
 
+
 class FeatureServiceLayerRelations(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
     layer = models.ForeignKey(FeatureServiceLayer)
@@ -925,18 +912,52 @@ class FeatureServiceLayerRelations(models.Model):
         return '{table}_{index}'.format(table=self.layer.table, index=self.related_index)
 
 
+class TemporaryFile(models.Model):
+    """ A temporary file upload """
+
+    uuid = models.CharField(max_length=36, default=uuid.uuid4)
+    date = models.DateTimeField(auto_now_add=True)
+    filename = models.CharField(max_length=100)
+    filesize = models.BigIntegerField()
+    file = models.FileField(upload_to=TEMPORARY_FILE_LOCATION, max_length=1024)
+
+    @property
+    def extension(self):
+        if '.' not in self.filename:
+            return ''
+        return self.filename[self.filename.rfind('.') + 1:]
+
+
 def delete_data_table(sender, instance, **kwargs):
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute('DROP table IF EXISTS {table_name}'.format(table_name=instance.table))
 
 
 signals.pre_delete.connect(delete_data_table, sender=FeatureServiceLayer)
 
 
-def sequence_exists(sequence_name):
-    with get_cursor() as c:
-        c.execute('SELECT 1 FROM pg_class WHERE relname=%s', (sequence_name,))
-        return bool(c.fetchone())
+def determine_extent(table):
+
+    try:
+        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
+            field_name=GEOM_FIELD_NAME,
+            table_name=table
+        )
+
+        with connection.cursor() as c:
+            c.execute(query)
+            extent_box = c.fetchone()[0]
+            if extent_box:
+                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
+            else:
+                extent = ADJUSTED_GLOBAL_EXTENT
+
+    except DatabaseError:
+        logger.exception('Error generating extent for table {0}, returning adjusted global extent'.format(table))
+        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
+        extent = ADJUSTED_GLOBAL_EXTENT
+
+    return extent.as_dict()
 
 
 def copy_data_table_for_import(dataset_id):
@@ -964,26 +985,25 @@ def copy_data_table_for_import(dataset_id):
     create_sequence_command = 'CREATE SEQUENCE {sequence_name}'.format(sequence_name=sequence_name)
 
     alter_table_command = (
-        'ALTER TABLE {import_table} ADD PRIMARY KEY ({primary_key}), '
-        'ALTER COLUMN {primary_key} SET DEFAULT nextval(\'{sequence_name}\')'
+        'ALTER TABLE {import_table} ADD PRIMARY KEY ({pk}), '
+        'ALTER COLUMN {pk} SET DEFAULT nextval(\'{sequence_name}\')'
     ).format(
         import_table=import_table_name,
-        primary_key=PRIMARY_KEY_NAME,
+        pk=PRIMARY_KEY_NAME,
         sequence_name=sequence_name
     )
 
-    alter_sequence_command = 'ALTER SEQUENCE {sequence_name} owned by {import_table}.{primary_key}'.format(
+    alter_sequence_command = 'ALTER SEQUENCE {sequence_name} OWNED BY {import_table}.{pk}'.format(
         import_table=import_table_name,
-        primary_key=PRIMARY_KEY_NAME,
+        pk=PRIMARY_KEY_NAME,
         sequence_name=sequence_name
     )
 
     alter_sequence_start_command = (
-        'SELECT setval(\'{sequence_name}\', (select max({primary_key})+1 '
-        'from {import_table}), false)'
+        'SELECT setval(\'{sequence_name}\', (SELECT max({pk})+1 FROM {import_table}), false)'
     ).format(
         import_table=import_table_name,
-        primary_key=PRIMARY_KEY_NAME,
+        pk=PRIMARY_KEY_NAME,
         sequence_name=sequence_name
     )
 
@@ -992,7 +1012,7 @@ def copy_data_table_for_import(dataset_id):
         column_name=GEOM_FIELD_NAME
     )
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute(drop_table_command)
         c.execute(copy_table_command)
         c.execute(create_sequence_command)
@@ -1004,14 +1024,36 @@ def copy_data_table_for_import(dataset_id):
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
 
+def sequence_exists(sequence_name):
+    with connection.cursor() as c:
+        c.execute('SELECT 1 FROM pg_class WHERE relname=%s', (sequence_name,))
+        return bool(c.fetchone())
+
+
+class Column(object):
+    """ Helper for table creation """
+
+    def __init__(self, **entries):
+        self.__dict__.update(entries)
+
+
+def create_aggregate_database_table(row, dataset_id):
+    row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
+    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
+    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
+    row.pop()  # remove the appended column
+    return table_name
+
+
 def create_database_table(row, dataset_id, append=False, optional_fields=None):
     optional_fields = optional_fields or []
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+
     if not append:
         drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
-        create_table_command = 'CREATE TABLE {table_name} ({primary_key} serial NOT NULL PRIMARY KEY'.format(
+        create_table_command = 'CREATE TABLE {table_name} ({pk} serial NOT NULL PRIMARY KEY'.format(
             table_name=table_name,
-            primary_key=PRIMARY_KEY_NAME
+            pk=PRIMARY_KEY_NAME
         )
         type_conversion = {
             'decimal': 'double precision',
@@ -1035,7 +1077,7 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
         create_table_command += ');'
 
         try:
-            with get_cursor() as c:
+            with connection.cursor() as c:
                 c.execute(drop_table_command)
                 c.execute(create_table_command)
         except DatabaseError:
@@ -1044,73 +1086,14 @@ def create_database_table(row, dataset_id, append=False, optional_fields=None):
     return table_name
 
 
-def create_aggregate_database_table(row, dataset_id):
-    row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
-    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
-    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
-    row.pop()  # remove the appended column
-    return table_name
-
-
-def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_combine):
-    delete_command = 'DELETE FROM {0}'.format(aggregate_table_name)
-
-    all_commands = [delete_command]
-    for dataset_id in datasets_ids_to_combine:
-
-        with get_cursor() as c:
-            c.execute('SELECT * from {dataset_table_name} LIMIT 0'.format(
-                dataset_table_name=TABLE_NAME_PREFIX + dataset_id
-            ))
-            colnames_in_table = [desc[0].lower() for desc in c.description]
-
-        current_columns = [column for column in columns if column.column.lower() in colnames_in_table]
-
-        insert_command = (
-            'INSERT INTO {table_name} ({definition_fields} {source_dataset}, {spatial_field}) '
-            'SELECT {definition_fields} {dataset_id}, {spatial_field} FROM {dataset_table_name}'
-        ).format(
-            table_name=aggregate_table_name,
-            definition_fields=','.join([column.column for column in current_columns]) + ',' if current_columns else '',
-            source_dataset=SOURCE_DATASET_FIELD_NAME,
-            dataset_id="'{0}'".format(dataset_id),
-            dataset_table_name=TABLE_NAME_PREFIX + dataset_id,
-            spatial_field=GEOM_FIELD_NAME
-        )
-        logger.debug(insert_command)
-        all_commands.append(insert_command)
-
-    with get_cursor() as c:
-        for command in all_commands:
-            c.execute(command)
-
-
-def populate_data(table_name, row_set):
-    first_row = next(row_set.sample)
-    field_list = '{field_list}'.format(
-        field_list=','.join([cell.column for cell in first_row])
-    )
-    insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
-        table_name=table_name,
-        field_list=field_list
-    )
-
-    with get_cursor() as c:
-        header_skipped = False
-        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
-        values_list = []
-        for row in row_set:
-            if not header_skipped:
-                header_skipped = True
-                continue
-            all_values = [cell.value for cell in row]
-            individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
-            values_list.append(individual_insert_command)
-
-        c.execute(insert_command + ','.join(values_list))
-
-
 def add_or_update_database_fields(table_name, fields):
+
+    check_command = (
+        'SELECT EXISTS('
+        '    SELECT column_name FROM information_schema.columns '
+        '    WHERE table_name=%s and column_name=%s'
+        ')'
+    )
 
     for field in fields:
         alter_commands = []
@@ -1119,12 +1102,7 @@ def add_or_update_database_fields(table_name, fields):
         required = field.get('required', False)
         value = field.get('value')
 
-        check_command = (
-            'SELECT EXISTS('
-            'SELECT column_name FROM information_schema.columns '
-            'WHERE table_name=%s and column_name=%s)'
-        )
-        with get_cursor() as c:
+        with connection.cursor() as c:
             c.execute(check_command, (table_name, column_name))
             column_exists = c.fetchone()[0]
 
@@ -1137,24 +1115,25 @@ def add_or_update_database_fields(table_name, fields):
             alter_commands.append(set_default_command)
 
         else:
-            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {db_type}{not_null} DEFAULT {value}'.format(
+            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {value}'.format(
                 table_name=table_name,
                 column_name=column_name,
-                db_type=db_type,
-                not_null=' NOT NULL' if required else '',
+                column_type=db_type + (' NOT NULL' if required else ''),
                 value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
             )
-
             alter_commands.append(alter_command)
-        with get_cursor() as c:
+
+        with connection.cursor() as c:
             for command in alter_commands:
                 c.execute(command)
 
 
 def add_geometry_column(dataset_id, is_import=True):
 
-    with get_cursor() as c:
-        add_command = "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})".format(
+    with connection.cursor() as c:
+        add_command = (
+            "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
+        ).format(
             schema='public',
             table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
             column_name=GEOM_FIELD_NAME,
@@ -1169,6 +1148,91 @@ def add_geometry_column(dataset_id, is_import=True):
             column_name=GEOM_FIELD_NAME
         )
         c.execute(index_command)
+
+
+def get_fields(for_table):
+    fields = []
+    with connection.cursor() as c:
+        c.execute(
+            ' '.join((
+                'SELECT column_name, is_nullable, data_type',
+                'FROM information_schema.columns',
+                'WHERE table_name = %s',
+                'ORDER BY ordinal_position;'
+            )),
+            [for_table]
+        )
+        # c.description won't be populated without first running the query above
+        for field_info in c.fetchall():
+            field_type = field_info[2]
+            fields.append({
+                'name': field_info[0],
+                'alias': field_info[0],
+                'type': POSTGIS_ESRI_FIELD_MAPPING.get(field_type),
+                'nullable': True if field_info[1] == 'YES' else False,
+                'editable': True
+            })
+
+    return fields
+
+
+def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_combine):
+    delete_command = 'DELETE FROM {0}'.format(aggregate_table_name)
+
+    all_commands = [delete_command]
+    for dataset_id in datasets_ids_to_combine:
+
+        with connection.cursor() as c:
+            c.execute('SELECT * from {table_name} LIMIT 0'.format(
+                table_name=TABLE_NAME_PREFIX + dataset_id
+            ))
+            colnames_in_table = [desc[0].lower() for desc in c.description]
+
+        current_columns = [column for column in columns if column.column.lower() in colnames_in_table]
+
+        insert_command = (
+            'INSERT INTO {table_name} ({definition_fields} {source_dataset}, {spatial_field}) '
+            'SELECT {definition_fields} {dataset_id}, {spatial_field} FROM {dataset_table}'
+        ).format(
+            table_name=aggregate_table_name,
+            definition_fields=','.join([column.column for column in current_columns]) + ',' if current_columns else '',
+            source_dataset=SOURCE_DATASET_FIELD_NAME,
+            dataset_id="'{0}'".format(dataset_id),
+            dataset_table=TABLE_NAME_PREFIX + dataset_id,
+            spatial_field=GEOM_FIELD_NAME
+        )
+
+        logger.debug(insert_command)
+        all_commands.append(insert_command)
+
+    with connection.cursor() as c:
+        for command in all_commands:
+            c.execute(command)
+
+
+def populate_data(table_name, row_set):
+    first_row = next(row_set.sample)
+    field_list = '{field_list}'.format(
+        field_list=','.join([cell.column for cell in first_row])
+    )
+    insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
+        table_name=table_name,
+        field_list=field_list
+    )
+
+    with connection.cursor() as c:
+        header_skipped = False
+        values_parenthetical = '({values})'.format(values=','.join(['%s' for cell in first_row]))
+        values_list = []
+        for row in row_set:
+            if not header_skipped:
+                header_skipped = True
+                continue
+            all_values = [cell.value for cell in row]
+            individual_insert_command = c.mogrify(values_parenthetical, all_values).decode('utf-8')
+            values_list.append(individual_insert_command)
+
+        c.execute(insert_command + ','.join(values_list))
 
 
 def populate_point_data(pk, csv_info, is_import=True):
@@ -1198,56 +1262,6 @@ def populate_point_data(pk, csv_info, is_import=True):
         field_name=GEOM_FIELD_NAME,
     )
 
-    with get_cursor() as c:
+    with connection.cursor() as c:
         c.execute(update_command)
         c.execute(clear_null_command)
-
-
-def determine_extent(table):
-
-    try:
-        query = 'SELECT ST_Expand(CAST(ST_Extent({field_name}) AS box2d), 1000) AS box2d FROM {table_name}'.format(
-            field_name=GEOM_FIELD_NAME,
-            table_name=table
-        )
-
-        with get_cursor() as c:
-            c.execute(query)
-            extent_box = c.fetchone()[0]
-            if extent_box:
-                extent = Extent.from_sql_box(extent_box, SpatialReference({'wkid': WEB_MERCATOR_SRID}))
-            else:
-                extent = ADJUSTED_GLOBAL_EXTENT
-
-    except DatabaseError:
-        logger.exception('Error generating extent for table {0}, returning adjusted global extent'.format(table))
-        # Default to adjusted global extent if there is an error, similar to the one we present on the map page
-        extent = ADJUSTED_GLOBAL_EXTENT
-
-    return extent.as_dict()
-
-
-def get_cursor():
-    return connection.cursor()
-
-
-class Column(object):
-    def __init__(self, **entries):
-        self.__dict__.update(entries)
-
-
-class TemporaryFile(models.Model):
-    """A temporary file upload"""
-
-    uuid = models.CharField(max_length=36, default=uuid.uuid4)
-    date = models.DateTimeField(auto_now_add=True)
-    filename = models.CharField(max_length=100)
-    filesize = models.BigIntegerField()
-    file = models.FileField(upload_to=TEMPORARY_FILE_LOCATION, max_length=1024)
-
-    @property
-    def extension(self):
-        if self.filename.find(".") != -1:
-            return self.filename[self.filename.rfind(".") + 1:]
-        else:
-            return ""

@@ -1,6 +1,10 @@
-# All the functions here are translations of ESRI Terraformer library from JS and are used for converting
-# ESRI geometry JSON to GeoJSON
-# TODO look for optimization possibilities
+"""
+All these functions are translations of ESRI Terraformer library from JS
+They are used for converting ESRI geometry JSON to GeoJSON
+
+TODO: look for optimization possibilities
+"""
+
 import json
 import re
 
@@ -83,7 +87,7 @@ def from_rings(rings):
         ring = close_ring(r)
         if len(ring) < 4:
             # A ring with length of less than 4 is not a polygon and can be ignored.
-            # close_ring makes sure the first and the last points are the same; that's why minimum length is 4 and not 3
+            # close_ring ensures the first and the last points are the same; that's why minimum length is 4 and not 3
             continue
 
         if is_clockwise(ring):

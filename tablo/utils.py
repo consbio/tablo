@@ -1,13 +1,62 @@
 import json
+
 from collections import OrderedDict
 
-from tastypie.fields import CharField
+
+def dictfetchall(cursor):
+    """ :return: all rows from a cursor as a dict """
+
+    desc = cursor.description
+    return [
+        OrderedDict(zip([col[0] for col in desc], row))
+        for row in cursor.fetchall()
+    ]
 
 
-# code from http://danieljlewis.org/files/2010/06/Jenks.pdf
-# described at http://danieljlewis.org/2010/06/07/jenks-natural-breaks-algorithm-in-python/
+def get_gvf(data_list, num_classes):
+    """
+    The Goodness of Variance Fit (GVF) is found by taking the difference between the squared deviations
+    from the array mean (SDAM) and the squared deviations from the class means (SDCM), and dividing by the SDAM
+    """
+
+    breaks = get_jenks_breaks(data_list, num_classes)
+    data_list.sort()
+
+    list_mean = sum(data_list) / len(data_list)
+    sdam = 0.0
+
+    for i in range(0, len(data_list)):
+        sq_dev = (data_list[i] - list_mean) ** 2
+        sdam += sq_dev
+
+    sdcm = 0.0
+    for i in range(0, num_classes):
+        if breaks[i] == 0:
+            class_start = 0
+        else:
+            class_start = data_list.index(breaks[i])
+            class_start += 1
+
+        class_end = data_list.index(breaks[i + 1])
+        class_list = data_list[class_start:class_end + 1]
+        class_mean = sum(class_list) / len(class_list)
+
+        pre_sdcm = 0.0
+        for j in range(0, len(class_list)):
+            sqDev2 = (class_list[j] - class_mean) ** 2
+            pre_sdcm += sqDev2
+        sdcm += pre_sdcm
+
+    return (sdam - sdcm) / sdam
+
 
 def get_jenks_breaks(data_list, num_classes):
+    """
+    Code was taken from the now-unavailable links below
+    :see: http://danieljlewis.org/files/2010/06/Jenks.pdf
+    :see: http://danieljlewis.org/2010/06/07/jenks-natural-breaks-algorithm-in-python/
+    """
+
     data_list.sort()
     mat1 = []
     for i in range(0, len(data_list) + 1):
@@ -60,49 +109,8 @@ def get_jenks_breaks(data_list, num_classes):
     return kclass
 
 
-def get_gvf(data_list, num_classes):
-    """
-    The Goodness of Variance Fit (GVF) is found by taking the
-    difference between the squared deviations
-    from the array mean (SDAM) and the squared deviations from the
-    class means (SDCM), and dividing by the SDAM
-    """
-    breaks = get_jenks_breaks(data_list, num_classes)
-    data_list.sort()
-    list_mean = sum(data_list) / len(data_list)
-    sdam = 0.0
-    for i in range(0, len(data_list)):
-        sq_dev = (data_list[i] - list_mean) ** 2
-        sdam += sq_dev
-    sdcm = 0.0
-    for i in range(0, num_classes):
-        if breaks[i] == 0:
-            class_start = 0
-        else:
-            class_start = data_list.index(breaks[i])
-            class_start += 1
-        class_end = data_list.index(breaks[i + 1])
-        class_list = data_list[class_start:class_end + 1]
-        class_mean = sum(class_list) / len(class_list)
-        pre_sdcm = 0.0
-        for j in range(0, len(class_list)):
-            sqDev2 = (class_list[j] - class_mean) ** 2
-            pre_sdcm += sqDev2
-        sdcm += pre_sdcm
-    return (sdam - sdcm) / sdam
-
-
-def dictfetchall(cursor):
-    "Returns all rows from a cursor as a dict"
-    desc = cursor.description
-    return [
-        OrderedDict(zip([col[0] for col in desc], row))
-        for row in cursor.fetchall()
-    ]
-
-
 def json_date_serializer(obj):
-    # Handles date serialization when part of the response object
+    """ Handles date serialization when part of the response object """
 
     if hasattr(obj, 'isoformat'):
         serial = obj.isoformat()
@@ -124,17 +132,3 @@ def get_file_ops_error_code(e):
         error_code = 'TRANSFORM'
 
     return error_code
-
-
-class JSONField(CharField):
-    def convert(self, value):
-        if value is None:
-            return None
-        return json.loads(value, strict=False)
-
-    def hydrate(self, bundle):
-        value = super(JSONField, self).hydrate(bundle)
-        if value:
-            value = json.dumps(value)
-
-        return value
