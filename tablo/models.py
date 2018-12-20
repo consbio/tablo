@@ -1240,9 +1240,9 @@ def populate_data(table_name, row_set):
 
         try:
             c.execute(insert_command + '\n' + values_clause)
-        except DataError as ex:
+        except DataError as e:
             raise QueryExecutionError(
-                underlying=ex,
+                underlying=e,
                 fields=['{col} ({type})'.format(col=r.column, type=name_for_type(r)) for r in last_row]
             )
 
