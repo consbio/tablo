@@ -4,7 +4,7 @@ setup(
     name='tablo',
     description='A PostGIS table to feature service app for Django',
     keywords='feature service, map server, postgis, django',
-    version='1.1.2',
+    version='1.2.0',
     packages=['tablo', 'tablo.migrations', 'tablo.interfaces', 'tablo.interfaces.arcgis'],
     install_requires=[
         'Django==1.11.*', 'sqlparse>=0.1.18', 'pyproj', 'six', 'messytables',
