@@ -33,6 +33,28 @@ X_AND_Y_FIELDS = (
 )
 
 
+class EmptyType(CellType):
+    """ An empty cell """
+
+    result_type = unicode_string
+    guessing_weight = 0
+
+    def cast(self, value):
+        if value is None:
+            return None
+        if isinstance(value, self.result_type):
+            return value
+        try:
+            return unicode_string(value)
+        except UnicodeEncodeError:
+            return str(value)
+
+
+# We never want Boolean types, so exclude it from the defaults
+TYPES = (EmptyType, StringType, DecimalType, IntegerType, DateType)
+TYPE_NAMES = {t: t.__name__[:-4] for t in TYPES}
+
+
 def prepare_csv_rows(csv_file, csv_info=None):
     row_set = CSVTableSet(csv_file).tables[0]
 
@@ -99,6 +121,10 @@ def convert_header_to_column_name(header):
     return converted_header
 
 
+def determine_optional_fields(row_set):
+    return set(c.column for r in row_set for c in r if c.empty)
+
+
 def determine_x_and_y_fields(row):
     x_field = None
     y_field = None
@@ -140,25 +166,16 @@ def headers_processor_remove_blank(headers):
     return apply_headers
 
 
-class EmptyType(CellType):
-    """ An empty cell """
+def name_for_type(class_or_instance):
 
-    result_type = unicode_string
-    guessing_weight = 0
+    if isinstance(class_or_instance, type):
+        type_name = TYPE_NAMES.get(class_or_instance)
+    elif isinstance(class_or_instance, CellType):
+        type_name = TYPE_NAMES.get(class_or_instance.__class__)
+    elif isinstance(class_or_instance, Cell):
+        type_name = TYPE_NAMES.get(class_or_instance.type.__class__)
 
-    def cast(self, value):
-        if value is None:
-            return None
-        if isinstance(value, self.result_type):
-            return value
-        try:
-            return unicode_string(value)
-        except UnicodeEncodeError:
-            return str(value)
-
-
-# We never want Boolean types, so exclude it from the defaults
-TYPES = (EmptyType, StringType, DecimalType, IntegerType, DateType)
+    return type_name or '?'
 
 
 def type_guess(rows, types=TYPES, strict=False):

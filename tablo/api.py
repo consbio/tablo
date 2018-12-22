@@ -15,12 +15,12 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows
+from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows
+from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
 from tablo.models import add_geometry_column, add_or_update_database_fields
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
 from tablo.models import populate_aggregate_table, populate_data, populate_point_data
-from tablo.utils import get_file_ops_error_code
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ class FeatureServiceResource(ModelResource):
                 ), self.wrap_view('copy'), name="api_featureservice_copy"
             ),
             url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine_tables'.format(
+                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine-tables'.format(
                     self._meta.resource_name
                 ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
             ),
@@ -124,11 +124,12 @@ class FeatureServiceResource(ModelResource):
 
     def finalize(self, request, **kwargs):
         """
-        The finalize endpoint, located at ``{tablo_host}/api/v1/featureservice/{service_id}/finalize`` allows you to
-        finalize the feature service and mark it as available for use. This endpoint moves the data from the temporary
-        database table and into its permanent one. This endpoint whould be accessed with a **service_id** parameter
-        specifying the Service ID of the service you want to finalize.
+        The finalize endpoint, located at ``{tablo_host}/api/v1/featureservice/{service_id}/finalize``.
+        It allows you to finalize the feature service and mark it as available for use.
+        This endpoint moves the data from the temporary database table and into its permanent one.
+        It is accessed with a **service_id** parameter specifying the ID of the service you want to finalize.
         """
+
         try:
             service = FeatureService.objects.get(id=kwargs['service_id'])
         except ObjectDoesNotExist:
@@ -175,11 +176,12 @@ class FeatureServiceResource(ModelResource):
 
         columns = json.loads(request.POST.get('columns'))
         row_columns = [Column(column=col['name'], type=col['type'], required=col['required']) for col in columns]
-
         dataset_list = json.loads(request.POST.get('dataset_list'))
         table_name = create_aggregate_database_table(row_columns, service.dataset_id)
+
         add_geometry_column(service.dataset_id)
         populate_aggregate_table(table_name, row_columns, dataset_list)
+
         service._full_extent = None
         service._initial_extent = None
         service.featureservicelayer_set.first()._extent = None
@@ -400,14 +402,31 @@ class TemporaryFileResource(ModelResource):
         bundle = self.build_bundle(request=request)
         obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
 
-        if obj.extension == 'csv':
-            csv_file_name = obj.file.name
-        else:
-            raise ImmediateHttpResponse(HttpBadRequest('Unsupported file format.'))
+        try:
+            if obj.extension == 'csv':
+                csv_file_name = obj.file.name
+            else:
+                raise InvalidFileError('Unsupported file format', extension=obj.extension)
 
-        row_set = prepare_csv_rows(obj.file)
+        except InvalidFileError as e:
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(derive_error_response_data(e, code=BAD_DATA)),
+                content_type='application/json'
+            ))
 
-        sample_row = next(row_set.sample)
+        try:
+            row_set = prepare_csv_rows(obj.file)
+            sample_row = next(row_set.sample, None)
+
+            if sample_row is None:
+                raise InvalidFileError('File is empty', lines=0)
+
+        except InvalidFileError as e:
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(derive_error_response_data(e, code=BAD_DATA)),
+                content_type='application/json'
+            ))
+
         bundle.data['fieldNames'] = [cell.column for cell in sample_row]
         bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
         bundle.data['optionalFields'] = determine_optional_fields(row_set)
@@ -470,19 +489,23 @@ class TemporaryFileResource(ModelResource):
             row_set = prepare_csv_rows(obj.file, csv_info)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, optional_fields=optional_fields)
-            populate_data(table_name, row_set)
-
-            add_or_update_database_fields(table_name, additional_fields)
-
             bundle.data['table_name'] = table_name
 
+            populate_data(table_name, row_set)
+            add_or_update_database_fields(table_name, additional_fields)
             add_geometry_column(dataset_id)
-
             populate_point_data(dataset_id, csv_info)
-            obj.delete()    # Temporary file has been moved to database, safe to delete
+
+            obj.delete()  # Temporary file has been moved to database, safe to delete
+
         except Exception as e:
             logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest(get_file_ops_error_code(e)))
+
+            # Likely coming from uploaded data sent to populate_data
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(derive_error_response_data(e)),
+                content_type='application/json'
+            ))
 
         return self.create_response(request, bundle)
 
@@ -490,9 +513,8 @@ class TemporaryFileResource(ModelResource):
         self.is_authenticated(request)
 
         try:
-            dataset_id = kwargs.get('dataset_id')
+            dataset_id = kwargs.pop('dataset_id', None)
 
-            del kwargs['dataset_id']
             bundle = self.build_bundle(request=request)
             obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
 
@@ -502,35 +524,21 @@ class TemporaryFileResource(ModelResource):
             row_set = prepare_csv_rows(obj.file)
             sample_row = next(row_set.sample)
             table_name = create_database_table(sample_row, dataset_id, append=True)
+            bundle.data['table_name'] = table_name
 
             add_or_update_database_fields(table_name, additional_fields)
             populate_data(table_name, row_set)
-
-            bundle.data['table_name'] = table_name
-
             populate_point_data(dataset_id, csv_info)
-            obj.delete()    # Temporary file has been moved to database, safe to delete
+
+            obj.delete()  # Temporary file has been moved to database, safe to delete
+
         except Exception as e:
             logger.exception(e)
-            raise ImmediateHttpResponse(HttpBadRequest(get_file_ops_error_code(e)))
+
+            # Likely coming from uploaded data sent to populate_data
+            raise ImmediateHttpResponse(HttpBadRequest(
+                content=json.dumps(derive_error_response_data(e)),
+                content_type='application/json'
+            ))
 
         return self.create_response(request, bundle)
-
-
-def json_date_serializer(obj):
-    # Handles date serialization when part of the response object
-
-    if hasattr(obj, 'isoformat'):
-        serial = obj.isoformat()
-        return serial
-    return json.JSONEncoder.default(obj)
-
-
-def determine_optional_fields(row_set):
-
-    optional_fields = set([])
-    for row in row_set:
-        for cell in row:
-            if cell.empty:
-                optional_fields.add(cell.column)
-    return optional_fields

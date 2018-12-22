@@ -456,9 +456,9 @@ class QueryView(FeatureLayerView):
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
             geom_type = self.feature_service_layer.geometry_type
-        except ValidationError as ex:
+        except ValidationError as e:
             # Failed validation of provided fields and incoming SQL are handled here
-            return HttpResponseBadRequest(json.dumps({'error': ex.message}))
+            return HttpResponseBadRequest(json.dumps({'error': e.message}))
         except DatabaseError:
             return HttpResponseBadRequest(json.dumps({'error': 'Invalid request'}))
 
