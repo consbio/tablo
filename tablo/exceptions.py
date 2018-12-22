@@ -9,17 +9,11 @@ UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 
 
 class InvalidFileError(ValidationError):
-    """ An error with a CSV that can be caught before execution """
+    """ An error with a CSV that can be handled before database operations """
 
-    def __init__(self, underlying, lines=-1, extension=None):
-        self.message = getattr(underlying, 'message', str(underlying))
+    def __init__(self, message, lines=-1, extension=None, **kwargs):
+        super(InvalidFileError, self).__init__(message, **kwargs)
         self.file_info = {'lines': lines, 'extension': extension}
-
-        super(InvalidFileError, self).__init__(self.message)
-
-
-class InvalidSQLError(ValidationError):
-    """ A database error that should be caught before execution """
 
 
 class InvalidFieldsError(ValidationError, ValueError):
@@ -30,6 +24,10 @@ class InvalidFieldsError(ValidationError, ValueError):
         self.fields = [] if fields is None else fields
 
 
+class InvalidSQLError(ValidationError):
+    """ A database error that should be caught before execution """
+
+
 class RelatedFieldsError(InvalidFieldsError):
     """ A database field error caught before execution: raised when fields from related tables are invalid """
 
@@ -38,21 +36,21 @@ class QueryExecutionError(DataError, ValueError):
     """ A database error caught during query execution """
 
     def __init__(self, underlying, fields=None):
-        self.message = getattr(underlying, 'message', str(underlying))
+        self.message = error_to_string(underlying)
         self.fields = [] if fields is None else fields
 
         super(QueryExecutionError, self).__init__(self.message)
 
 
-def derive_error_response_data(e):
+def derive_error_response_data(e, code=UNKNOWN_ERROR):
     """ Inspects error message to derive error codes and info """
 
-    error_msg = getattr(e, 'message', str(e))
-    error_json = {'error_code': UNKNOWN_ERROR}
+    error_msg = error_to_string(e)
+    error_json = {'error_code': code, 'underlying': error_msg}
 
-    if getattr(e, 'fields', None):
+    if getattr(e, 'fields', None) is not None:
         error_json['field_info'] = e.fields
-    if getattr(e, 'file_info', None):
+    if getattr(e, 'file_info', None) is not None:
         error_json['file_info'] = e.file_info
 
     if 'transform' in error_msg:
@@ -60,9 +58,6 @@ def derive_error_response_data(e):
 
     elif 'column' in error_msg and 'specified more than once' in error_msg:
         error_json['error_code'] = DUPLICATE_COLUMN
-
-    elif isinstance(e, InvalidFileError):
-        error_json['error_code'] = BAD_DATA
 
     elif 'invalid input syntax' in error_msg:
         error_json['error_code'] = BAD_DATA
@@ -79,3 +74,8 @@ def derive_error_response_data(e):
             pass
 
     return error_json
+
+
+def error_to_string(error):
+    """ Helper to derive information from an error even if blank """
+    return getattr(error, 'message', str(error) or type(error).__name__)
