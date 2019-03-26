@@ -9,20 +9,21 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime
 from io import BytesIO
-from PIL import Image, ImageOps
-from sqlparse.tokens import Token
 
 from django.conf import settings
 from django.db import models, DatabaseError, connection
 from django.db.models import signals
-from django.db.utils import DataError
 from django.utils.datastructures import OrderedSet
 
+import numpy as np
+import pandas as pd
+from PIL import Image, ImageOps
+from sqlparse.tokens import Token
+
 from tablo import wkt, LARGE_IMAGE_NAME
-from tablo.csv_utils import name_for_type
-from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError, QueryExecutionError
+from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
-from tablo.utils import get_jenks_breaks, dictfetchall
+from tablo.utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
 from tablo.storage import default_public_storage as image_storage
 
 
@@ -31,6 +32,21 @@ FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
 
 NO_PK = 'NO_PK'
 
+PANDAS_TYPE_CONVERSION = {
+    'decimal': np.float64,
+    'date': np.datetime64,
+    'integer': np.int64,
+    'string': np.str,
+    'xlocation': np.float64,
+    'ylocation': np.float64,
+    'dropdownedit': np.str,
+    'drop'
+    'down': np.str,
+    'double': np.float64,
+    'image': np.str,
+    'text': np.str,
+    'timestamp': np.datetime64
+}
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
@@ -1039,87 +1055,35 @@ def create_aggregate_database_table(row, dataset_id):
     return table_name
 
 
-def create_database_table(row, dataset_id, append=False, optional_fields=None):
+def create_database_table(dataframe, dataset_id, append=False, additional_fields=None, optional_fields=None):
     optional_fields = optional_fields or []
-    table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
-    if not append:
-        drop_table_command = 'DROP TABLE IF EXISTS {table_name}'.format(table_name=table_name)
-        create_table_command = 'CREATE TABLE {table_name} ({pk} serial NOT NULL PRIMARY KEY'.format(
-            table_name=table_name,
-            pk=PRIMARY_KEY_NAME
-        )
-        type_conversion = {
-            'decimal': 'double precision',
-            'date': 'date',
-            'integer': 'bigint',
-            'string': 'text',
-            'xlocation': 'double precision',
-            'ylocation': 'double precision',
-            'dropdownedit': 'text',
-            'dropdown': 'text',
-            'double': 'double precision',
-            'image': 'text'
-        }
-        for cell in row:
-            create_table_command += ', {field_name} {type} {null}'.format(
-                field_name=cell.column,
-                type=type_conversion[re.sub(r'\([^)]*\)', '', str(cell.type).lower())],
-                null='NOT NULL' if cell.column not in optional_fields else ''
-            )
-
-        create_table_command += ');'
-
-        try:
-            with connection.cursor() as c:
-                c.execute(drop_table_command)
-                c.execute(create_table_command)
-        except DatabaseError:
-            raise
-
-    return table_name
-
-
-def add_or_update_database_fields(table_name, fields):
-
-    check_command = (
-        'SELECT EXISTS('
-        '    SELECT column_name FROM information_schema.columns '
-        '    WHERE table_name=%s and column_name=%s'
-        ')'
-    )
-
-    for field in fields:
-        alter_commands = []
+    for field in additional_fields:
         db_type = field.get('type')
         column_name = field.get('name')
-        required = field.get('required', False)
         value = field.get('value')
-
-        with connection.cursor() as c:
-            c.execute(check_command, (table_name, column_name))
-            column_exists = c.fetchone()[0]
-
-        if column_exists:
-            set_default_command = 'ALTER TABLE {table_name} ALTER COLUMN {column_name} SET DEFAULT {value}'.format(
-                table_name=table_name,
-                column_name=column_name,
-                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
-            )
-            alter_commands.append(set_default_command)
-
+        if column_name in dataframe.columns:
+            dataframe[column_name].fillna(PANDAS_TYPE_CONVERSION[db_type](value))
         else:
-            alter_command = 'ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type} DEFAULT {value}'.format(
-                table_name=table_name,
-                column_name=column_name,
-                column_type=db_type + (' NOT NULL' if required else ''),
-                value=value if db_type not in ('text', 'timestamp') else "'{0}'".format(value)
-            )
-            alter_commands.append(alter_command)
+            dataframe[column_name] = PANDAS_TYPE_CONVERSION[db_type](value)
 
-        with connection.cursor() as c:
-            for command in alter_commands:
-                c.execute(command)
+    table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+
+    with get_sqlalchemy_engine().connect() as conn:
+        if append:
+            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].tail(1).values[0] + 1
+            dataframe.index = dataframe.index + start_index
+            dataframe.to_sql(table_name, conn, if_exists='append', index_label=PRIMARY_KEY_NAME)
+        else:
+            dataframe.to_sql(table_name, conn, if_exists='replace', index_label=PRIMARY_KEY_NAME)
+            alter_statement = []
+            for c in dataframe.columns:
+                if c not in optional_fields:
+                    alter_statement.append('ALTER COLUMN {} SET NOT NULL'.format(c))
+            if alter_statement:
+                conn.execute('ALTER TABLE {} {}'.format(table_name, ','.join(alter_statement)))
+
+    return table_name
 
 
 def add_geometry_column(dataset_id, is_import=True):
@@ -1205,48 +1169,6 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
             c.execute(command)
 
 
-def populate_data(table_name, row_set):
-    header = next(row_set.sample)
-
-    field_list = '{field_list}'.format(
-        field_list=','.join([cell.column for cell in header])
-    )
-    insert_command = 'INSERT INTO {table_name} ({field_list}) VALUES '.format(
-        table_name=table_name,
-        field_list=field_list
-    )
-
-    with connection.cursor() as c:
-        values_format = '({template})'.format(template=','.join(['%s' for _ in header]))
-        values_list = []
-
-        header_skipped = False
-        last_row = header
-
-        for row in row_set:
-            if not header_skipped:
-                header_skipped = True
-                continue
-
-            all_values = [cell.value for cell in row]
-            individual_insert_command = c.mogrify(values_format, all_values).decode('utf-8')
-            values_list.append(individual_insert_command)
-
-            last_row = row
-
-        # Data coming in from uploaded file: implement error handling with sufficient info to address issues
-
-        values_clause = ',\n'.join(values_list)
-
-        try:
-            c.execute(insert_command + '\n' + values_clause)
-        except DataError as e:
-            raise QueryExecutionError(
-                underlying=e,
-                fields=['{col} ({type})'.format(col=r.column, type=name_for_type(r)) for r in last_row]
-            )
-
-
 def populate_point_data(pk, csv_info, is_import=True):
 
     srid = csv_info['srid']
@@ -1274,7 +1196,6 @@ def populate_point_data(pk, csv_info, is_import=True):
         field_name=GEOM_FIELD_NAME,
     )
 
-    # Data has already been proven by populate_data: no need for robust error handling
     with connection.cursor() as c:
         c.execute(update_command)
         c.execute(clear_null_command)

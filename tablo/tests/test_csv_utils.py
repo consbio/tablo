@@ -1,42 +1,42 @@
-from io import BytesIO
-from django.test import TestCase
-from messytables import StringType, IntegerType, DecimalType
+import io
 
-from tablo.csv_utils import prepare_csv_rows, EmptyType, convert_header_to_column_name, determine_x_and_y_fields
+from django.test import TestCase
+
+from tablo.csv_utils import prepare_csv_rows, convert_header_to_column_name, determine_x_and_y_fields
 
 
 class TestCSVUtils(TestCase):
 
     def test_prepare_csv_rows(self):
-        test_csv_file = BytesIO(
-            b'header_one,header_two,header_three,header_four\n'
-            b'one,1,,1\n'
-            b'two,2,,2.1\n'
+        test_csv_file = io.StringIO(
+            'header_one,header_two,header_three,header_four\n'
+            'one,1,,1\n'
+            'two,2,,2.1\n'
         )
         row_set = prepare_csv_rows(test_csv_file)
-        first_row = list(row_set.sample)[0]
-        self.assertEqual(first_row[0].type, StringType())
-        self.assertEqual(first_row[1].type, IntegerType())
-        self.assertEqual(first_row[2].type, EmptyType())
-        self.assertEqual(first_row[3].type, DecimalType())
+        dtypes = row_set.dtypes
+        self.assertEqual(dtypes[0].name, 'object')
+        self.assertEqual(dtypes[1].name, 'int64')
+        self.assertEqual(dtypes[2].name, 'float64')
+        self.assertEqual(dtypes[3].name, 'float64')
 
     def test_prepare_csv_rows_with_config(self):
         # Specifies String for the Empty Type
         csv_info = {
             'fieldNames': ['header_one', 'header_two', 'header_three', 'header_four'],
-            'dataTypes': ['String', 'Integer', 'String', 'Decimal']
+            'dataTypes': ['object', 'int64', 'object', 'float64']
         }
-        test_csv_file = BytesIO(
-            b'header_one,header_two,header_three,header_four\n'
-            b'one,1,,1\n'
-            b'two,2,,2.1\n'
+        test_csv_file = io.StringIO(
+            'header_one,header_two,header_three,header_four\n'
+            'one,1,,1\n'
+            'two,2,,2.1\n'
         )
         row_set = prepare_csv_rows(test_csv_file, csv_info)
-        first_row = list(row_set.sample)[0]
-        self.assertEqual(first_row[0].type, StringType())
-        self.assertEqual(first_row[1].type, IntegerType())
-        self.assertEqual(first_row[2].type, StringType())
-        self.assertEqual(first_row[3].type, DecimalType())
+        dtypes = row_set.dtypes
+        self.assertEqual(dtypes[0].name, 'object')
+        self.assertEqual(dtypes[1].name, 'int64')
+        self.assertEqual(dtypes[2].name, 'object')
+        self.assertEqual(dtypes[3].name, 'float64')
 
     def test_convert_header_to_column_name(self):
         test_cases = [
@@ -50,18 +50,16 @@ class TestCSVUtils(TestCase):
             self.assertEqual(convert_header_to_column_name(test[0]), test[1])
 
     def test_determine_x_and_y_fields(self):
-        test_csv_file = BytesIO(
-            b'lon,lat\n'
-            b'123.4,50.2\n'
+        test_csv_file = io.StringIO(
+            'lon,lat\n'
+            '123.4,50.2\n'
         )
         row_set = prepare_csv_rows(test_csv_file)
-        first_row = list(row_set.sample)[0]
-        self.assertEqual(determine_x_and_y_fields(first_row), ('lon', 'lat'))
+        self.assertEqual(determine_x_and_y_fields(row_set.columns), ('lon', 'lat'))
 
-        test_csv_file = BytesIO(
-            b'lon,something_else\n'
-            b'123.4,50.2\n'
+        test_csv_file = io.StringIO(
+            'lon,something_else\n'
+            '123.4,50.2\n'
         )
         row_set = prepare_csv_rows(test_csv_file)
-        first_row = list(row_set.sample)[0]
-        self.assertEqual(determine_x_and_y_fields(first_row), (None, None))
+        self.assertEqual(determine_x_and_y_fields(row_set.columns), (None, None))
