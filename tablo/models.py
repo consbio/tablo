@@ -404,10 +404,10 @@ class FeatureServiceLayer(models.Model):
 
             if start_time:
                 if start_time == end_time:
-                    where_clause += ' AND {time_field} = %s'.format(time_field=layer_time_field)
+                    where_clause += ' AND {time_field} = %s::date'.format(time_field=layer_time_field)
                     query_params.append(start_time)
                 else:
-                    where_clause += ' AND {time_field} BETWEEN %s AND %s'.format(time_field=layer_time_field)
+                    where_clause += ' AND {time_field} BETWEEN %s::date AND %s::date'.format(time_field=layer_time_field)
                     query_params.append(start_time)
                     query_params.append(end_time)
             elif where is None and not count_only:
