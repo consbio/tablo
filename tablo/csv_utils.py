@@ -88,6 +88,9 @@ def infer_data_types(row_set):
     data_types = []
     for c in row_set.columns:
         non_empty_rows = row_set[c][~row_set[c].isnull()]
+        if not len(non_empty_rows):
+            data_types.append('object')
+            continue
 
         is_date_type = False
 

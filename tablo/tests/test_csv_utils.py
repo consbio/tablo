@@ -2,23 +2,23 @@ import io
 
 from django.test import TestCase
 
-from tablo.csv_utils import prepare_csv_rows, convert_header_to_column_name, determine_x_and_y_fields
+from tablo.csv_utils import prepare_csv_rows, infer_data_types, convert_header_to_column_name, determine_x_and_y_fields
 
 
 class TestCSVUtils(TestCase):
 
-    def test_prepare_csv_rows(self):
+    def test_data_type_inference(self):
         test_csv_file = io.StringIO(
             'header_one,header_two,header_three,header_four\n'
             'one,1,,1\n'
             'two,2,,2.1\n'
         )
         row_set = prepare_csv_rows(test_csv_file)
-        dtypes = row_set.dtypes
-        self.assertEqual(dtypes[0].name, 'object')
-        self.assertEqual(dtypes[1].name, 'int64')
-        self.assertEqual(dtypes[2].name, 'float64')
-        self.assertEqual(dtypes[3].name, 'float64')
+        dtypes = infer_data_types(row_set)
+        self.assertEqual(dtypes[0], 'object')
+        self.assertIn('int', dtypes[1])
+        self.assertEqual(dtypes[2], 'object')
+        self.assertIn('float', dtypes[3])
 
     def test_prepare_csv_rows_with_config(self):
         # Specifies String for the Empty Type
@@ -34,7 +34,7 @@ class TestCSVUtils(TestCase):
         row_set = prepare_csv_rows(test_csv_file, csv_info)
         dtypes = row_set.dtypes
         self.assertEqual(dtypes[0].name, 'object')
-        self.assertEqual(dtypes[1].name, 'int64')
+        self.assertEqual(dtypes[1].name, 'Int64')
         self.assertEqual(dtypes[2].name, 'object')
         self.assertEqual(dtypes[3].name, 'float64')
 
