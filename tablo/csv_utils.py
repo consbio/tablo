@@ -79,10 +79,45 @@ def prepare_csv_rows(csv_file, csv_info=None):
         kwargs['dtype'], kwargs['parse_dates'] = types_from_config(csv_info)
         row_set = pd.read_csv(csv_file, **kwargs)
     else:
-        row_set = pd.read_csv(csv_file, **kwargs)
-        convert_date_columns(row_set)
+        row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
 
     return row_set
+
+
+def infer_data_types(row_set):
+    data_types = []
+    for c in row_set.columns:
+        non_empty_rows = row_set[c][~row_set[c].isnull()]
+
+        is_date_type = False
+
+        for fmt in DATE_FORMATS:
+            try:
+                datetime.datetime.strptime(row_set[c].loc[0], fmt)
+                is_date_type = True
+                data_types.append('datetime64')
+                break
+            except ValueError:
+                pass
+            except TypeError:
+                pass
+
+        if is_date_type:
+            continue
+
+        try:
+            # This is a cascading conversion: first try the smallest possible integer type.
+            # If data is not integer, it returns float64 instead; so next try the smallest possible float type.
+            # If data is not numeric, use object type (i.e. str).
+            data_type = pd.to_numeric(
+                pd.to_numeric(non_empty_rows, downcast='integer'),
+                downcast='float'
+            ).dtype.name
+            data_types.append(data_type)
+        except ValueError:
+            data_types.append('object')
+
+    return data_types
 
 
 def update_row_set_columns(row_set, csv_info, optional_fields=[]):
@@ -102,10 +137,17 @@ def types_from_config(csv_info):
 
     # np.object is used for str type
     convert_type = {
-        'int64': np.int64,
+        'int8': pd.Int8Dtype(),
+        'int16': pd.Int16Dtype(),
+        'int32': pd.Int32Dtype(),
+        'int64': pd.Int64Dtype(),
         'object': np.object,
+        'float': np.float,
+        'float16': np.float16,
+        'float32': np.float32,
         'float64': np.float64,
-        'datetime64[ns]': np.datetime64,
+        'float128': np.float128,
+        'datetime64': np.datetime64,
         'empty': np.object  # Sender doesn't know type either, default to Object
     }
     fields = csv_info['fieldNames']
@@ -118,24 +160,6 @@ def types_from_config(csv_info):
         else:
             data_types[fields[idx]] = convert_type[data_type_lowered]
     return data_types, date_fields
-
-
-def convert_date_columns(df):
-    date_columns = []
-    for c in df.columns:
-        first_valid_index = df[c].first_valid_index()
-        if first_valid_index is not None:
-            for fmt in DATE_FORMATS:
-                try:
-                    datetime.datetime.strptime(df[c].loc[first_valid_index], fmt)
-                    date_columns.append(c)
-                    break
-                except ValueError:
-                    pass
-                except TypeError:
-                    pass
-    for c in date_columns:
-        df[c] = df[c].astype(np.datetime64)
 
 
 def convert_header_to_column_name(header):
@@ -178,3 +202,10 @@ def determine_x_and_y_fields(columns):
             y_field = None
 
     return x_field, y_field
+
+
+def clean_str_columns(row_set):
+    for idx, dtype in enumerate(row_set.dtypes):
+        if dtype.name == 'object':
+            column = row_set.columns[idx]
+            row_set[column] = row_set[column].str.strip()

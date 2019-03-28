@@ -21,6 +21,7 @@ from PIL import Image, ImageOps
 from sqlparse.tokens import Token
 
 from tablo import wkt, LARGE_IMAGE_NAME
+from tablo.csv_utils import clean_str_columns
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
@@ -40,8 +41,7 @@ PANDAS_TYPE_CONVERSION = {
     'xlocation': np.float64,
     'ylocation': np.float64,
     'dropdownedit': np.str,
-    'drop'
-    'down': np.str,
+    'dropdown': np.str,
     'double': np.float64,
     'image': np.str,
     'text': np.str,
@@ -50,12 +50,14 @@ PANDAS_TYPE_CONVERSION = {
 
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
+    'smallint': 'esriFieldTypeSmallInteger',
     'boolean': 'esriFieldTypeSmallInteger',
     'integer': 'esriFieldTypeInteger',
     'text': 'esriFieldTypeString',
     'character': 'esriFieldTypeString',
     'character varying': 'esriFieldTypeBlob',
     'double precision': 'esriFieldTypeDouble',
+    'real': 'esriFieldTypeDouble',
     'date': 'esriFieldTypeDate',
     'timestamp without time zone': 'esriFieldTypeDate',
     'Geometry': 'esriFieldTypeGeometry',
@@ -1055,29 +1057,30 @@ def create_aggregate_database_table(row, dataset_id):
     return table_name
 
 
-def create_database_table(dataframe, dataset_id, append=False, additional_fields=None, optional_fields=None):
+def create_database_table(row_set, dataset_id, append=False, additional_fields=None, optional_fields=None):
     optional_fields = optional_fields or []
 
     for field in additional_fields:
         db_type = field.get('type')
         column_name = field.get('name')
         value = field.get('value')
-        if column_name in dataframe.columns:
-            dataframe[column_name].fillna(PANDAS_TYPE_CONVERSION[db_type](value))
+        if column_name in row_set.columns:
+            row_set[column_name].fillna(PANDAS_TYPE_CONVERSION[db_type](value))
         else:
-            dataframe[column_name] = PANDAS_TYPE_CONVERSION[db_type](value)
+            row_set[column_name] = PANDAS_TYPE_CONVERSION[db_type](value)
 
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
     with get_sqlalchemy_engine().connect() as conn:
+        clean_str_columns(row_set)
         if append:
-            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].tail(1).values[0] + 1
-            dataframe.index = dataframe.index + start_index
-            dataframe.to_sql(table_name, conn, if_exists='append', index_label=PRIMARY_KEY_NAME)
+            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max() + 1
+            row_set.index = row_set.index + start_index
+            row_set.to_sql(table_name, conn, if_exists='append', index_label=PRIMARY_KEY_NAME)
         else:
-            dataframe.to_sql(table_name, conn, if_exists='replace', index_label=PRIMARY_KEY_NAME)
+            row_set.to_sql(table_name, conn, if_exists='replace', index_label=PRIMARY_KEY_NAME)
             alter_statement = []
-            for c in dataframe.columns:
+            for c in row_set.columns:
                 if c not in optional_fields:
                     alter_statement.append('ALTER COLUMN {} SET NOT NULL'.format(c))
             if alter_statement:

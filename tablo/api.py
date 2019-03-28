@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 
 from django.conf.urls import url
 from django.core.exceptions import ObjectDoesNotExist
@@ -15,7 +14,8 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows, update_row_set_columns
+from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows
+from tablo.csv_utils import infer_data_types, update_row_set_columns
 from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
 from tablo.models import add_geometry_column
@@ -23,8 +23,6 @@ from tablo.models import copy_data_table_for_import, create_aggregate_database_t
 from tablo.models import populate_aggregate_table, populate_point_data
 
 logger = logging.getLogger(__name__)
-
-TYPE_REGEX = re.compile(r'\([^\)]*\)')
 
 
 class FeatureServiceResource(ModelResource):
@@ -402,6 +400,8 @@ class TemporaryFileResource(ModelResource):
         bundle = self.build_bundle(request=request)
         obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
 
+        csv_info = json.loads(request.POST.get('csv_info', '{}')) or None
+
         try:
             if obj.extension == 'csv':
                 csv_file_name = obj.file.name
@@ -414,19 +414,24 @@ class TemporaryFileResource(ModelResource):
                 content_type='application/json'
             ))
 
-        try:
-            row_set = prepare_csv_rows(obj.file)
-            sample_row_index = row_set.first_valid_index()
-            if sample_row_index is None:
-                raise InvalidFileError('File is empty', lines=0)
-        except InvalidFileError as e:
-            raise ImmediateHttpResponse(HttpBadRequest(
-                content=json.dumps(derive_error_response_data(e, code=BAD_DATA)),
-                content_type='application/json'
-            ))
+        row_set = prepare_csv_rows(obj.file, csv_info)
+        if len(row_set) == 0:
+            raise ImmediateHttpResponse(
+                HttpBadRequest(
+                    content=json.dumps(
+                        derive_error_response_data(
+                            InvalidFileError('File is emtpy', lines=0),
+                            code=BAD_DATA
+                        )
+                    ),
+                    content_type='application/json'
+                )
+            )
+
+        data_types = csv_info['dataTypes'] if csv_info else infer_data_types(row_set)
 
         bundle.data['fieldNames'] = row_set.columns.to_list()
-        bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(dtype)) for dtype in row_set.dtypes]
+        bundle.data['dataTypes'] = data_types
         bundle.data['optionalFields'] = determine_optional_fields(row_set)
 
         x_field, y_field = determine_x_and_y_fields(row_set.columns)
