@@ -5,9 +5,12 @@ import re
 
 from django.db.models.fields.files import FieldFile
 
-import numpy as np
 import pandas as pd
+import fiona.crs
+from geoalchemy2 import WKTElement
+from pyproj import Proj, transform
 
+from tablo import GEOM_FIELD_NAME, WEB_MERCATOR_SRID
 
 POSTGRES_KEYWORDS = [
     'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
@@ -76,12 +79,12 @@ def prepare_csv_rows(csv_file, csv_info=None):
     }
 
     if csv_info:
-        kwargs['dtype'], kwargs['parse_dates'] = types_from_config(csv_info)
-        row_set = pd.read_csv(csv_file, **kwargs)
-    else:
-        row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
+        kwargs['parse_dates'] = get_date_fields(csv_info)
 
-    return row_set
+    row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
+    data_types = infer_data_types(row_set)
+
+    return row_set, data_types
 
 
 def infer_data_types(row_set):
@@ -89,16 +92,22 @@ def infer_data_types(row_set):
     for c in row_set.columns:
         non_empty_rows = row_set[c][~row_set[c].isnull()]
         if not len(non_empty_rows):
-            data_types.append('object')
+            data_types.append('Empty')
             continue
 
+        # If csv is loadded with csv_info, then given date columns are already parsed and we can continue
+        if row_set[c].dtype.name.lower().startswith('date'):
+            data_types.append('Date')
+            continue
+
+        first_value = row_set[c].loc[0]
         is_date_type = False
 
         for fmt in DATE_FORMATS:
             try:
-                datetime.datetime.strptime(row_set[c].loc[0], fmt)
+                datetime.datetime.strptime(first_value, fmt)
                 is_date_type = True
-                data_types.append('datetime64')
+                data_types.append('Date')
                 break
             except ValueError:
                 pass
@@ -109,82 +118,25 @@ def infer_data_types(row_set):
             continue
 
         try:
-            # This is a cascading conversion: first try the smallest possible integer type.
-            # If data is not integer, it returns float64 instead; so next try the smallest possible float type.
-            # If data is not numeric, use object type (i.e. str).
-            data_type = pd.to_numeric(
-                pd.to_numeric(non_empty_rows, downcast='integer'),
-                downcast='float'
-            ).dtype.name
-            data_types.append(data_type)
+            data_type = pd.to_numeric(non_empty_rows).dtype.name.lower()
+            if 'int' in data_type:
+                data_types.append('Integer')
+            elif 'float' in data_type:
+                data_types.append('Decimal')
         except ValueError:
-            data_types.append('object')
+            data_types.append('String')
 
     return data_types
 
 
-def update_row_set_columns(row_set, csv_info, optional_fields=[]):
-    converted_headers = map(convert_header_to_column_name, row_set.columns)
-    optional_fields = list(map(convert_header_to_column_name, optional_fields))
-    csv_info['fieldNames'] = list(map(convert_header_to_column_name, csv_info['fieldNames']))
-    csv_info['xColumn'] = convert_header_to_column_name(csv_info['xColumn'])
-    csv_info['yColumn'] = convert_header_to_column_name(csv_info['yColumn'])
-    return row_set.rename(columns=dict(zip(row_set.columns, converted_headers))), csv_info, optional_fields
-
-
-def types_from_config(csv_info):
-    """
-    Determines the type of the columns based on the csvInfo.dataTypes.
-    This allows us to keep from guessing when the sender of the file knows more about the types than we do.
-    """
-
-    # np.object is used for str type
-    convert_type = {
-        'int8': pd.Int8Dtype(),
-        'int16': pd.Int16Dtype(),
-        'int32': pd.Int32Dtype(),
-        'int64': pd.Int64Dtype(),
-        'object': np.object,
-        'float': np.float,
-        'float16': np.float16,
-        'float32': np.float32,
-        'float64': np.float64,
-        'float128': np.float128,
-        'datetime64': np.datetime64,
-        'empty': np.object  # Sender doesn't know type either, default to Object
-    }
+def get_date_fields(csv_info):
     fields = csv_info['fieldNames']
-    data_types = {}
     date_fields = []
     for idx, data_type in enumerate(csv_info['dataTypes']):
         data_type_lowered = data_type.lower()
-        if data_type_lowered.startswith('date'):
+        if data_type_lowered == 'date':
             date_fields.append(fields[idx])
-        else:
-            data_types[fields[idx]] = convert_type[data_type_lowered]
-    return data_types, date_fields
-
-
-def convert_header_to_column_name(header):
-    converted_header = header.lower()
-    converted_header = converted_header.replace(' ', '_')
-    converted_header = converted_header.replace('-', '_')
-    converted_header = re.sub(r'\W', '', converted_header)
-    converted_header = converted_header.strip('_')
-
-    # Remove non-ascii characters
-    converted_header = re.sub(r'[^\x00-\x7f]', '', converted_header)
-
-    if converted_header[0].isdigit():
-        converted_header = 'f_' + converted_header
-    if converted_header in POSTGRES_KEYWORDS:
-        converted_header += '_a'
-
-    return converted_header
-
-
-def determine_optional_fields(row_set):
-    return list(c for c in row_set.columns if row_set[c].isnull().values.any())
+    return date_fields
 
 
 def determine_x_and_y_fields(columns):
@@ -207,8 +159,55 @@ def determine_x_and_y_fields(columns):
     return x_field, y_field
 
 
-def clean_str_columns(row_set):
-    for idx, dtype in enumerate(row_set.dtypes):
-        if dtype.name == 'object':
+def convert_header_to_column_name(header):
+    converted_header = header.lower()
+    converted_header = converted_header.replace(' ', '_')
+    converted_header = converted_header.replace('-', '_')
+    converted_header = re.sub(r'\W', '', converted_header)
+    converted_header = converted_header.strip('_')
+
+    # Remove non-ascii characters
+    converted_header = re.sub(r'[^\x00-\x7f]', '', converted_header)
+
+    if converted_header[0].isdigit():
+        converted_header = 'f_' + converted_header
+    if converted_header in POSTGRES_KEYWORDS:
+        converted_header += '_a'
+
+    return converted_header
+
+
+def create_point(x, y, srid):
+    inp_proj = Proj(fiona.crs.from_epsg(srid))
+    out_proj = Proj(fiona.crs.from_epsg(WEB_MERCATOR_SRID))
+    updated_x, updated_y = transform(inp_proj, out_proj, x, y)
+    return WKTElement('POINT({} {})'.format(updated_x, updated_y), srid=WEB_MERCATOR_SRID)
+
+
+def prepare_row_set_for_import(row_set, csv_info):
+    for idx, data_type in enumerate(row_set.dtypes):
+        if data_type.name == 'object':
             column = row_set.columns[idx]
             row_set[column] = row_set[column].str.strip()
+
+    updated_column_names = {}
+    for idx, column in enumerate(row_set.columns):
+        updated_column_names[column] = convert_header_to_column_name(column)
+
+        # We do not need to update date fields, because they are parsed by pandas on import
+        csv_data_type = csv_info['dataTypes'][idx].lower()
+        if csv_data_type == 'integer':
+            # Determine the smallest int type and use the relevant pandas nullable integer type
+            non_empty_rows = row_set[column][~row_set[column].isnull()]
+            int_type = pd.to_numeric(non_empty_rows, downcast='integer').dtype.name
+            row_set[column] = pd.to_numeric(row_set[column]).astype(int_type.capitalize())
+        elif csv_data_type == 'decimal':
+            row_set[column] = pd.to_numeric(row_set[column], downcast='float')
+        elif csv_data_type == 'string' or csv_data_type == 'empty':
+            row_set[column] = row_set[column].str.strip()
+
+    row_set[GEOM_FIELD_NAME] = list(zip(row_set[csv_info['xColumn']], row_set[csv_info['yColumn']]))
+    row_set[GEOM_FIELD_NAME] = row_set[GEOM_FIELD_NAME].apply(lambda v: create_point(v[0], v[1], csv_info['srid']))
+
+    row_set.rename(columns=updated_column_names, inplace=True)
+    return row_set

@@ -15,13 +15,15 @@ from django.db import models, DatabaseError, connection
 from django.db.models import signals
 from django.utils.datastructures import OrderedSet
 
-import numpy as np
 import pandas as pd
+from geoalchemy2 import Geometry
 from PIL import Image, ImageOps
 from sqlparse.tokens import Token
 
-from tablo import wkt, LARGE_IMAGE_NAME
-from tablo.csv_utils import clean_str_columns
+from tablo import wkt, LARGE_IMAGE_NAME, NO_PK, PANDAS_TYPE_CONVERSION, POSTGIS_ESRI_FIELD_MAPPING, IMPORT_SUFFIX
+from tablo import TABLE_NAME_PREFIX, PRIMARY_KEY_NAME, GEOM_FIELD_NAME, SOURCE_DATASET_FIELD_NAME, WEB_MERCATOR_SRID
+from tablo import ADJUSTED_GLOBAL_EXTENT
+from tablo.csv_utils import prepare_row_set_for_import
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
@@ -30,56 +32,6 @@ from tablo.storage import default_public_storage as image_storage
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'temp')
 FILE_STORE_DOMAIN_NAME = getattr(settings, 'FILESTORE_DOMAIN_NAME', 'domain')
-
-NO_PK = 'NO_PK'
-
-PANDAS_TYPE_CONVERSION = {
-    'decimal': np.float64,
-    'date': np.datetime64,
-    'integer': np.int64,
-    'string': np.str,
-    'xlocation': np.float64,
-    'ylocation': np.float64,
-    'dropdownedit': np.str,
-    'dropdown': np.str,
-    'double': np.float64,
-    'image': np.str,
-    'text': np.str,
-    'timestamp': np.datetime64
-}
-
-POSTGIS_ESRI_FIELD_MAPPING = {
-    'bigint': 'esriFieldTypeInteger',
-    'smallint': 'esriFieldTypeSmallInteger',
-    'boolean': 'esriFieldTypeSmallInteger',
-    'integer': 'esriFieldTypeInteger',
-    'text': 'esriFieldTypeString',
-    'character': 'esriFieldTypeString',
-    'character varying': 'esriFieldTypeBlob',
-    'double precision': 'esriFieldTypeDouble',
-    'real': 'esriFieldTypeDouble',
-    'date': 'esriFieldTypeDate',
-    'timestamp without time zone': 'esriFieldTypeDate',
-    'Geometry': 'esriFieldTypeGeometry',
-    'Unknown': 'esriFieldTypeString',
-    'OID': 'esriFieldTypeOID',
-}
-
-IMPORT_SUFFIX = '_import'
-TABLE_NAME_PREFIX = 'db_'
-PRIMARY_KEY_NAME = 'db_id'
-GEOM_FIELD_NAME = 'dbasin_geom'
-SOURCE_DATASET_FIELD_NAME = 'source_dataset'
-WEB_MERCATOR_SRID = 3857
-
-# Adjusted global extent -- adjusted to better fit screen layout. Same as mapController.getAdjustedGlobalExtent().
-ADJUSTED_GLOBAL_EXTENT = Extent({
-    'xmin': -20000000,
-    'ymin': -7000000,
-    'xmax': 20000000,
-    'ymax': 18000000,
-    'spatialReference': {'wkid': WEB_MERCATOR_SRID}
-})
 
 logger = logging.getLogger(__name__)
 
@@ -130,11 +82,6 @@ class FeatureService(models.Model):
             ))
 
             c.execute('ALTER TABLE {old_table_name} RENAME TO {new_table_name}'.format(
-                old_table_name=old_table_name,
-                new_table_name=new_table_name
-            ))
-
-            c.execute('ALTER INDEX {old_table_name}_geom_index RENAME TO {new_table_name}_geom_index'.format(
                 old_table_name=old_table_name,
                 new_table_name=new_table_name
             ))
@@ -1051,14 +998,13 @@ class Column(object):
 
 def create_aggregate_database_table(row, dataset_id):
     row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
-    optional_fields = [col.column for col in row if hasattr(col, 'required') and not col.required]
-    table_name = create_database_table(row, dataset_id, optional_fields=optional_fields)
+    table_name = create_database_table(row, dataset_id)
     row.pop()  # remove the appended column
     return table_name
 
 
-def create_database_table(row_set, dataset_id, append=False, additional_fields=None, optional_fields=None):
-    optional_fields = optional_fields or []
+def create_database_table(row_set, csv_info, dataset_id, append=False, additional_fields=None):
+    row_set = prepare_row_set_for_import(row_set, csv_info)
 
     for field in additional_fields:
         db_type = field.get('type')
@@ -1072,19 +1018,24 @@ def create_database_table(row_set, dataset_id, append=False, additional_fields=N
     table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
     with get_sqlalchemy_engine().connect() as conn:
-        clean_str_columns(row_set)
         if append:
             start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max() + 1
             row_set.index = row_set.index + start_index
-            row_set.to_sql(table_name, conn, if_exists='append', index_label=PRIMARY_KEY_NAME)
+            row_set.to_sql(
+                table_name,
+                conn,
+                if_exists='append',
+                index_label=PRIMARY_KEY_NAME,
+                dtype={GEOM_FIELD_NAME: Geometry('POINT', srid=WEB_MERCATOR_SRID)}
+            )
         else:
-            row_set.to_sql(table_name, conn, if_exists='replace', index_label=PRIMARY_KEY_NAME)
-            alter_statement = []
-            for c in row_set.columns:
-                if c not in optional_fields:
-                    alter_statement.append('ALTER COLUMN {} SET NOT NULL'.format(c))
-            if alter_statement:
-                conn.execute('ALTER TABLE {} {}'.format(table_name, ','.join(alter_statement)))
+            row_set.to_sql(
+                table_name,
+                conn,
+                if_exists='replace',
+                index_label=PRIMARY_KEY_NAME,
+                dtype={GEOM_FIELD_NAME: Geometry('POINT', srid=WEB_MERCATOR_SRID)}
+            )
 
     return table_name
 
@@ -1170,35 +1121,3 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
     with connection.cursor() as c:
         for command in all_commands:
             c.execute(command)
-
-
-def populate_point_data(pk, csv_info, is_import=True):
-
-    srid = csv_info['srid']
-
-    make_point_command = 'ST_SetSRID(ST_MakePoint({x_column}, {y_column}), {srid})'.format(
-        x_column=csv_info['xColumn'],
-        y_column=csv_info['yColumn'],
-        srid=srid
-    )
-
-    if srid != WEB_MERCATOR_SRID:
-        make_point_command = 'ST_Transform({original_command}, {geo_srid})'.format(
-            original_command=make_point_command,
-            geo_srid=WEB_MERCATOR_SRID
-        )
-
-    update_command = 'UPDATE {table_name} SET {field_name} = {make_point_command}'.format(
-        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
-        field_name=GEOM_FIELD_NAME,
-        make_point_command=make_point_command
-    )
-
-    clear_null_command = 'DELETE FROM {table_name} WHERE {field_name} IS NULL'.format(
-        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
-        field_name=GEOM_FIELD_NAME,
-    )
-
-    with connection.cursor() as c:
-        c.execute(update_command)
-        c.execute(clear_null_command)

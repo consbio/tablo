@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 
 from django.db import migrations
 
-from tablo.models import GEOM_FIELD_NAME, WEB_MERCATOR_SRID
+from tablo import GEOM_FIELD_NAME, WEB_MERCATOR_SRID
 
 forward_sql = """
     DO

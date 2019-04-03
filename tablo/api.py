@@ -14,13 +14,12 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows
-from tablo.csv_utils import infer_data_types, update_row_set_columns
+from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows
 from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
 from tablo.models import add_geometry_column
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
-from tablo.models import populate_aggregate_table, populate_point_data
+from tablo.models import populate_aggregate_table
 
 logger = logging.getLogger(__name__)
 
@@ -327,12 +326,6 @@ class TemporaryFileResource(ModelResource):
         detail_uri_name = 'uuid'
         serializer = Serializer(formats=['json', 'jsonp'])
 
-    def _convert_number(self, number):
-        """Converts a number to float or int as appropriate"""
-
-        number = float(number)
-        return int(number) if number.is_integer() else float(number)
-
     def prepend_urls(self):
         return [
             url(
@@ -368,8 +361,7 @@ class TemporaryFileResource(ModelResource):
 
                 {
                     "fieldNames": ["field one", "field two", "latitude", "longitude"],
-                    "dataTypes": ["String", "Integer", "Double", "Double"],
-                    "optionalFields": ["field one"],
+                    "dataTypes": ["String", "Integer", "Decimal", "Decimal"],
                     "xColumn": "longitude",
                     "yColumn": "latitude",
                     "filename": "uploaded.csv"
@@ -381,9 +373,6 @@ class TemporaryFileResource(ModelResource):
             **dataTypes**
                 A list of data types for each of the columns. The index of this list will match the index of the
                 fieldNames list.
-
-            **optionalFields**
-                A list of fields that had empty values, and are taken to be optional.
 
             **xColumn**
                 The best guess at which column contains X spatial coordinates.
@@ -400,8 +389,6 @@ class TemporaryFileResource(ModelResource):
         bundle = self.build_bundle(request=request)
         obj = self.obj_get(bundle, **self.remove_api_resource_names(kwargs))
 
-        csv_info = json.loads(request.POST.get('csv_info', '{}')) or None
-
         try:
             if obj.extension == 'csv':
                 csv_file_name = obj.file.name
@@ -414,8 +401,11 @@ class TemporaryFileResource(ModelResource):
                 content_type='application/json'
             ))
 
-        row_set = prepare_csv_rows(obj.file, csv_info)
-        if len(row_set) == 0:
+        csv_info = json.loads(request.POST.get('csv_info', '{}')) or None
+
+        row_set, data_types = prepare_csv_rows(obj.file, csv_info)
+
+        if not len(row_set):
             raise ImmediateHttpResponse(
                 HttpBadRequest(
                     content=json.dumps(
@@ -428,11 +418,8 @@ class TemporaryFileResource(ModelResource):
                 )
             )
 
-        data_types = csv_info['dataTypes'] if csv_info else infer_data_types(row_set)
-
         bundle.data['fieldNames'] = row_set.columns.to_list()
         bundle.data['dataTypes'] = data_types
-        bundle.data['optionalFields'] = determine_optional_fields(row_set)
 
         x_field, y_field = determine_x_and_y_fields(row_set.columns)
         if x_field and y_field:
@@ -465,7 +452,6 @@ class TemporaryFileResource(ModelResource):
                     {
                         "name": "field_name",
                         "type": "text",
-                        "value": "optional value",
                         "required": true
                     }
 
@@ -486,24 +472,15 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            # Use separate iterator of table rows to not exaust the main one
-            optional_fields = determine_optional_fields(prepare_csv_rows(obj.file))
+            row_set, data_types = prepare_csv_rows(obj.file, csv_info)
 
-            row_set, csv_info, optional_fields = update_row_set_columns(
-                prepare_csv_rows(obj.file, csv_info),
-                csv_info,
-                optional_fields
-            )
             table_name = create_database_table(
                 row_set,
+                csv_info,
                 dataset_id,
-                additional_fields=additional_fields,
-                optional_fields=optional_fields
+                additional_fields=additional_fields
             )
             bundle.data['table_name'] = table_name
-
-            add_geometry_column(dataset_id)
-            populate_point_data(dataset_id, csv_info)
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
 
@@ -529,16 +506,15 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            row_set, csv_info, _ = update_row_set_columns(prepare_csv_rows(obj.file, csv_info), csv_info)
+            row_set, data_types = prepare_csv_rows(obj.file, csv_info)
             table_name = create_database_table(
                 row_set,
+                csv_info,
                 dataset_id,
                 additional_fields=additional_fields,
                 append=True
             )
             bundle.data['table_name'] = table_name
-
-            populate_point_data(dataset_id, csv_info)
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
 
