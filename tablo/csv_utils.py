@@ -6,11 +6,6 @@ import re
 from django.db.models.fields.files import FieldFile
 
 import pandas as pd
-import fiona.crs
-from geoalchemy2 import WKTElement
-from pyproj import Proj, transform
-
-from tablo import GEOM_FIELD_NAME, WEB_MERCATOR_SRID
 
 POSTGRES_KEYWORDS = [
     'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
@@ -177,13 +172,6 @@ def convert_header_to_column_name(header):
     return converted_header
 
 
-def create_point(x, y, srid):
-    inp_proj = Proj(fiona.crs.from_epsg(srid))
-    out_proj = Proj(fiona.crs.from_epsg(WEB_MERCATOR_SRID))
-    updated_x, updated_y = transform(inp_proj, out_proj, x, y)
-    return WKTElement('POINT({} {})'.format(updated_x, updated_y), srid=WEB_MERCATOR_SRID)
-
-
 def prepare_row_set_for_import(row_set, csv_info):
     for idx, data_type in enumerate(row_set.dtypes):
         if data_type.name == 'object':
@@ -205,9 +193,6 @@ def prepare_row_set_for_import(row_set, csv_info):
             row_set[column] = pd.to_numeric(row_set[column], downcast='float')
         elif csv_data_type == 'string' or csv_data_type == 'empty':
             row_set[column] = row_set[column].str.strip()
-
-    row_set[GEOM_FIELD_NAME] = list(zip(row_set[csv_info['xColumn']], row_set[csv_info['yColumn']]))
-    row_set[GEOM_FIELD_NAME] = row_set[GEOM_FIELD_NAME].apply(lambda v: create_point(v[0], v[1], csv_info['srid']))
 
     row_set.rename(columns=updated_column_names, inplace=True)
     return row_set

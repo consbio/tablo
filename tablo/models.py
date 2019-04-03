@@ -966,11 +966,6 @@ def copy_data_table_for_import(dataset_id):
         sequence_name=sequence_name
     )
 
-    index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
-        table_name=TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX,
-        column_name=GEOM_FIELD_NAME
-    )
-
     with connection.cursor() as c:
         c.execute(drop_table_command)
         c.execute(copy_table_command)
@@ -978,7 +973,6 @@ def copy_data_table_for_import(dataset_id):
         c.execute(alter_table_command)
         c.execute(alter_sequence_command)
         c.execute(alter_sequence_start_command)
-        c.execute(index_command)
 
     return TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
 
@@ -1121,3 +1115,33 @@ def populate_aggregate_table(aggregate_table_name, columns, datasets_ids_to_comb
     with connection.cursor() as c:
         for command in all_commands:
             c.execute(command)
+
+
+def populate_point_data(pk, srid, x_column, y_column, is_import=True):
+    make_point_command = 'ST_SetSRID(ST_MakePoint({x_column}, {y_column}), {srid})'.format(
+        x_column=x_column,
+        y_column=y_column,
+        srid=srid
+    )
+
+    if srid != WEB_MERCATOR_SRID:
+        make_point_command = 'ST_Transform({original_command}, {geo_srid})'.format(
+            original_command=make_point_command,
+            geo_srid=WEB_MERCATOR_SRID
+        )
+
+    update_command = 'UPDATE {table_name} SET {field_name} = {make_point_command}'.format(
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
+        field_name=GEOM_FIELD_NAME,
+        make_point_command=make_point_command
+    )
+
+    clear_null_command = 'DELETE FROM {table_name} WHERE {field_name} IS NULL'.format(
+        table_name=TABLE_NAME_PREFIX + pk + (IMPORT_SUFFIX if is_import else ''),
+        field_name=GEOM_FIELD_NAME,
+    )
+
+    # Data has already been proven by populate_data: no need for robust error handling
+    with connection.cursor() as c:
+        c.execute(update_command)
+        c.execute(clear_null_command)

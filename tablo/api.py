@@ -14,10 +14,10 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows
+from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows, convert_header_to_column_name
 from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
-from tablo.models import add_geometry_column
+from tablo.models import add_geometry_column, populate_point_data
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
 from tablo.models import populate_aggregate_table
 
@@ -480,6 +480,12 @@ class TemporaryFileResource(ModelResource):
                 dataset_id,
                 additional_fields=additional_fields
             )
+            add_geometry_column(dataset_id)
+            srid = csv_info['srid']
+            x_column = convert_header_to_column_name(csv_info['xColumn'])
+            y_column = convert_header_to_column_name(csv_info['yColumn'])
+            populate_point_data(dataset_id, srid, x_column, y_column)
+
             bundle.data['table_name'] = table_name
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
@@ -514,6 +520,11 @@ class TemporaryFileResource(ModelResource):
                 additional_fields=additional_fields,
                 append=True
             )
+            srid = csv_info['srid']
+            x_column = convert_header_to_column_name(csv_info['xColumn'])
+            y_column = convert_header_to_column_name(csv_info['yColumn'])
+            populate_point_data(dataset_id, srid, x_column, y_column)
+
             bundle.data['table_name'] = table_name
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
