@@ -348,6 +348,12 @@ class TemporaryFileResource(ModelResource):
             )
         ]
 
+    def populate_point_data(self, dataset_id, csv_info):
+        srid = csv_info['srid']
+        x_column = convert_header_to_column_name(csv_info['xColumn'])
+        y_column = convert_header_to_column_name(csv_info['yColumn'])
+        populate_point_data(dataset_id, srid, x_column, y_column)
+
     def describe(self, request, **kwargs):
         """
         Describe, located at the ``{tablo-server}/api/v1/temporary-files/{uuid}/describe`` endpoint, will describe
@@ -481,10 +487,7 @@ class TemporaryFileResource(ModelResource):
                 additional_fields=additional_fields
             )
             add_geometry_column(dataset_id)
-            srid = csv_info['srid']
-            x_column = convert_header_to_column_name(csv_info['xColumn'])
-            y_column = convert_header_to_column_name(csv_info['yColumn'])
-            populate_point_data(dataset_id, srid, x_column, y_column)
+            self.populate_point_data(dataset_id, csv_info)
 
             bundle.data['table_name'] = table_name
 
@@ -520,10 +523,7 @@ class TemporaryFileResource(ModelResource):
                 additional_fields=additional_fields,
                 append=True
             )
-            srid = csv_info['srid']
-            x_column = convert_header_to_column_name(csv_info['xColumn'])
-            y_column = convert_header_to_column_name(csv_info['yColumn'])
-            populate_point_data(dataset_id, srid, x_column, y_column)
+            self.populate_point_data(dataset_id, csv_info)
 
             bundle.data['table_name'] = table_name
 
