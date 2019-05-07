@@ -13,7 +13,8 @@ class TestCSVUtils(TestCase):
             'one,1,,1\n'
             'two,2,,2.1\n'
         )
-        row_set, dtypes = prepare_csv_rows(test_csv_file)
+        prepared_csv = prepare_csv_rows(test_csv_file)
+        dtypes = prepared_csv['data_types']
         self.assertEqual(dtypes[0].lower(), 'string')
         self.assertEqual(dtypes[1].lower(), 'integer')
         self.assertEqual(dtypes[2].lower(), 'empty')
