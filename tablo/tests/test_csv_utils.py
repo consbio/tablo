@@ -2,7 +2,7 @@ import io
 
 from django.test import TestCase
 
-from tablo.csv_utils import prepare_csv_rows, convert_header_to_column_name, determine_x_and_y_fields
+from tablo.csv_utils import prepare_csv_rows, convert_header_to_column_name
 
 
 class TestCSVUtils(TestCase):
@@ -35,12 +35,12 @@ class TestCSVUtils(TestCase):
             'lon,lat\n'
             '123.4,50.2\n'
         )
-        row_set, _ = prepare_csv_rows(test_csv_file)
-        self.assertEqual(determine_x_and_y_fields(row_set.columns), ('lon', 'lat'))
+        prepared_csv = prepare_csv_rows(test_csv_file)
+        self.assertEqual(prepared_csv['coord_fields'], ('lon', 'lat'))
 
         test_csv_file = io.StringIO(
             'lon,something_else\n'
             '123.4,50.2\n'
         )
-        row_set, _ = prepare_csv_rows(test_csv_file)
-        self.assertEqual(determine_x_and_y_fields(row_set.columns), (None, None))
+        prepared_csv = prepare_csv_rows(test_csv_file)
+        self.assertEqual(prepared_csv['coord_fields'], (None, None))

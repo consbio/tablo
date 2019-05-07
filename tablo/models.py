@@ -23,7 +23,7 @@ from sqlparse.tokens import Token
 from tablo import wkt, LARGE_IMAGE_NAME, NO_PK, PANDAS_TYPE_CONVERSION, POSTGIS_ESRI_FIELD_MAPPING, IMPORT_SUFFIX
 from tablo import TABLE_NAME_PREFIX, PRIMARY_KEY_NAME, GEOM_FIELD_NAME, SOURCE_DATASET_FIELD_NAME, WEB_MERCATOR_SRID
 from tablo import ADJUSTED_GLOBAL_EXTENT
-from tablo.csv_utils import prepare_row_set_for_import
+from tablo.csv_utils import prepare_row_set_for_import, convert_header_to_column_name
 from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
 from tablo.geom_utils import Extent, SpatialReference
 from tablo.utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
@@ -921,7 +921,7 @@ def determine_extent(table):
 
 def copy_data_table_for_import(dataset_id):
 
-    import_table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+    import_table_name = '{}{}{}'.format(TABLE_NAME_PREFIX, dataset_id, IMPORT_SUFFIX)
     counter = 0
 
     # Find the first non-used sequence for this import table
@@ -991,13 +991,48 @@ class Column(object):
 
 
 def create_aggregate_database_table(row, dataset_id):
-    row.append(Column(column=SOURCE_DATASET_FIELD_NAME, type='string'))
-    table_name = create_database_table(row, dataset_id)
-    row.pop()  # remove the appended column
+    columns = [convert_header_to_column_name(SOURCE_DATASET_FIELD_NAME)]
+    data_types = ['String']
+    optional_fields = []
+    type_conversion = {
+        'decimal': 'Decimal',
+        'date': 'Date',
+        'integer': 'Integer',
+        'string': 'String',
+        'xLocation': 'Decimal',
+        'yLocation': 'Decimal',
+        'dropdownedit': 'String',
+        'dropdown': 'String',
+    }
+    for col in row:
+        col_name = convert_header_to_column_name(col.column)
+        columns.append(col_name)
+        data_types.append(type_conversion[col.type])
+        if hasattr(col, 'required') and not col.required:
+            optional_fields.append(col_name)
+    df = pd.DataFrame(columns=columns)
+    df_info = {
+        'dataTypes': data_types,
+        'optionalFields': optional_fields
+    }
+    table_name = create_database_table(df, df_info, dataset_id)
+    with get_sqlalchemy_engine().connect() as conn:
+        sequence_name = '{}_0_seq'.format(table_name)
+        conn.execute('CREATE SEQUENCE {}'.format(sequence_name))
+        conn.execute(
+            'ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint'.format(
+                table=table_name, key=PRIMARY_KEY_NAME
+            )
+        )
+        conn.execute(
+            'ALTER TABLE {} ALTER COLUMN {} SET DEFAULT nextval(\'{}\')'.format(
+                table_name, PRIMARY_KEY_NAME, sequence_name
+            )
+        )
     return table_name
 
 
-def create_database_table(row_set, csv_info, dataset_id, append=False, additional_fields=None):
+def create_database_table(row_set, csv_info, dataset_id, append=False, additional_fields=[]):
     row_set = prepare_row_set_for_import(row_set, csv_info)
 
     for field in additional_fields:
@@ -1009,27 +1044,30 @@ def create_database_table(row_set, csv_info, dataset_id, append=False, additiona
         else:
             row_set[column_name] = PANDAS_TYPE_CONVERSION[db_type](value)
 
-    table_name = TABLE_NAME_PREFIX + dataset_id + IMPORT_SUFFIX
+    table_name = '{}{}{}'.format(TABLE_NAME_PREFIX, dataset_id, IMPORT_SUFFIX)
 
     with get_sqlalchemy_engine().connect() as conn:
-        if append:
-            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max() + 1
-            row_set.index = row_set.index + start_index
-            row_set.to_sql(
-                table_name,
-                conn,
-                if_exists='append',
-                index_label=PRIMARY_KEY_NAME,
-                dtype={GEOM_FIELD_NAME: Geometry('POINT', srid=WEB_MERCATOR_SRID)}
-            )
+        if not append:
+            exists_op = 'replace'
         else:
-            row_set.to_sql(
-                table_name,
-                conn,
-                if_exists='replace',
-                index_label=PRIMARY_KEY_NAME,
-                dtype={GEOM_FIELD_NAME: Geometry('POINT', srid=WEB_MERCATOR_SRID)}
-            )
+            exists_op = 'append'
+            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max()
+            row_set.index = row_set.index + start_index
+
+        row_set.to_sql(
+            table_name,
+            conn,
+            if_exists=exists_op,
+            index_label=PRIMARY_KEY_NAME,
+            dtype={GEOM_FIELD_NAME: Geometry('POINT', srid=WEB_MERCATOR_SRID)}
+        )
+
+        constraints_query = ['ALTER COLUMN {} SET NOT NULL'.format(PRIMARY_KEY_NAME)]
+        for c in row_set.columns:
+            if c not in csv_info['optionalFields']:
+                constraints_query.append('ALTER COLUMN {} SET NOT NULL'.format(c))
+        constraints_query = 'ALTER TABLE {} {}'.format(table_name, ','.join(constraints_query))
+        conn.execute(constraints_query)
 
     return table_name
 

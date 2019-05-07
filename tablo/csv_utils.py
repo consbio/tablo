@@ -53,11 +53,11 @@ def prepare_csv_rows(csv_file, csv_info=None):
     if isinstance(csv_file, str):
         with open(csv_file, 'r') as f:
             header_line = [f.readline()]
-    elif isinstance(csv_file, io.BufferedIOBase) or isinstance(csv_file, io.StringIO):
+    elif isinstance(csv_file, (io.BufferedIOBase, io.StringIO)):
         csv_file.seek(0)
         header_line = [csv_file.readline()]
         csv_file.seek(0)
-    elif isinstance(csv_file, FieldFile) or isinstance(csv_file, io.BytesIO):
+    elif isinstance(csv_file, (FieldFile, io.BytesIO)):
         csv_file.seek(0)
         header_line = [csv_file.readline().decode()]
         csv_file.seek(0)
@@ -65,7 +65,7 @@ def prepare_csv_rows(csv_file, csv_info=None):
         raise TypeError('Invalid csv file')
 
     reader = csv.reader(header_line)
-    headers = list(filter(lambda c: c, next(reader)))  # remove empty column names
+    headers = [c for c in next(reader) if c]  # remove empty column names
 
     kwargs = {
         'usecols': headers,
@@ -73,29 +73,43 @@ def prepare_csv_rows(csv_file, csv_info=None):
         'skipinitialspace': True
     }
 
-    if csv_info:
-        kwargs['parse_dates'] = get_date_fields(csv_info)
-
     row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
-    data_types = infer_data_types(row_set)
 
-    return row_set, data_types
+    row_set.rename(columns={c: convert_header_to_column_name(c) for c in row_set.columns}, inplace=True)
+
+    if csv_info:
+        date_fields = get_date_fields(csv_info)
+        for field in date_fields:
+            row_set[field] = row_set[field].astype('datetime64')
+
+    row_set.index += 1
+    data_types = infer_data_types(row_set)
+    optional_fields = determine_optional_fields(row_set)
+    x_field, y_field = determine_x_and_y_fields(row_set.columns)
+
+    return {
+        'row_set': row_set,
+        'data_types': data_types,
+        'optional_fields': optional_fields,
+        'coord_fields': (x_field, y_field)
+    }
 
 
 def infer_data_types(row_set):
     data_types = []
     for c in row_set.columns:
-        non_empty_rows = row_set[c][~row_set[c].isnull()]
+        column_series = row_set[c]
+        non_empty_rows = column_series[~column_series.isnull()]
         if not len(non_empty_rows):
             data_types.append('Empty')
             continue
 
         # If csv is loadded with csv_info, then given date columns are already parsed and we can continue
-        if row_set[c].dtype.name.lower().startswith('date'):
+        if column_series.dtype.name.lower().startswith('date'):
             data_types.append('Date')
             continue
 
-        first_value = row_set[c].loc[0]
+        first_value = column_series.loc[1]
         is_date_type = False
 
         for fmt in DATE_FORMATS:
@@ -104,9 +118,7 @@ def infer_data_types(row_set):
                 is_date_type = True
                 data_types.append('Date')
                 break
-            except ValueError:
-                pass
-            except TypeError:
+            except (ValueError, TypeError):
                 pass
 
         if is_date_type:
@@ -132,6 +144,10 @@ def get_date_fields(csv_info):
         if data_type_lowered == 'date':
             date_fields.append(fields[idx])
     return date_fields
+
+
+def determine_optional_fields(row_set):
+    return list(c for c in row_set.columns if row_set[c].isnull().values.any())
 
 
 def determine_x_and_y_fields(columns):
@@ -178,10 +194,7 @@ def prepare_row_set_for_import(row_set, csv_info):
             column = row_set.columns[idx]
             row_set[column] = row_set[column].str.strip()
 
-    updated_column_names = {}
     for idx, column in enumerate(row_set.columns):
-        updated_column_names[column] = convert_header_to_column_name(column)
-
         # We do not need to update date fields, because they are parsed by pandas on import
         csv_data_type = csv_info['dataTypes'][idx].lower()
         if csv_data_type == 'integer':
@@ -191,8 +204,7 @@ def prepare_row_set_for_import(row_set, csv_info):
             row_set[column] = pd.to_numeric(row_set[column]).astype(int_type.capitalize())
         elif csv_data_type == 'decimal':
             row_set[column] = pd.to_numeric(row_set[column], downcast='float')
-        elif csv_data_type == 'string' or csv_data_type == 'empty':
+        elif csv_data_type in ('string', 'empty'):
             row_set[column] = row_set[column].str.strip()
 
-    row_set.rename(columns=updated_column_names, inplace=True)
     return row_set

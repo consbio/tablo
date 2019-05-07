@@ -14,12 +14,11 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_x_and_y_fields, prepare_csv_rows, convert_header_to_column_name
+from tablo.csv_utils import prepare_csv_rows
 from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
-from tablo.models import add_geometry_column, populate_point_data
+from tablo.models import add_geometry_column, populate_point_data, populate_aggregate_table
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
-from tablo.models import populate_aggregate_table
 
 logger = logging.getLogger(__name__)
 
@@ -350,8 +349,8 @@ class TemporaryFileResource(ModelResource):
 
     def populate_point_data(self, dataset_id, csv_info):
         srid = csv_info['srid']
-        x_column = convert_header_to_column_name(csv_info['xColumn'])
-        y_column = convert_header_to_column_name(csv_info['yColumn'])
+        x_column = csv_info['xColumn']
+        y_column = csv_info['yColumn']
         populate_point_data(dataset_id, srid, x_column, y_column)
 
     def describe(self, request, **kwargs):
@@ -407,9 +406,10 @@ class TemporaryFileResource(ModelResource):
                 content_type='application/json'
             ))
 
-        csv_info = json.loads(request.POST.get('csv_info', '{}')) or None
+        csv_info = json.loads(request.POST.get('csv_info') or '{}') or None
 
-        row_set, data_types = prepare_csv_rows(obj.file, csv_info)
+        prepared_csv = prepare_csv_rows(obj.file, csv_info)
+        row_set = prepared_csv['row_set']
 
         if not len(row_set):
             raise ImmediateHttpResponse(
@@ -425,9 +425,10 @@ class TemporaryFileResource(ModelResource):
             )
 
         bundle.data['fieldNames'] = row_set.columns.to_list()
-        bundle.data['dataTypes'] = data_types
+        bundle.data['dataTypes'] = prepared_csv['data_types']
+        bundle.data['optionalFields'] = prepared_csv['optional_fields']
 
-        x_field, y_field = determine_x_and_y_fields(row_set.columns)
+        x_field, y_field = prepared_csv['coord_fields']
         if x_field and y_field:
             bundle.data['xColumn'] = x_field
             bundle.data['yColumn'] = y_field
@@ -478,10 +479,10 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            row_set, data_types = prepare_csv_rows(obj.file, csv_info)
+            prepared_csv = prepare_csv_rows(obj.file, csv_info)
 
             table_name = create_database_table(
-                row_set,
+                prepared_csv['row_set'],
                 csv_info,
                 dataset_id,
                 additional_fields=additional_fields
@@ -515,13 +516,13 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            row_set, data_types = prepare_csv_rows(obj.file, csv_info)
+            prepared_csv = prepare_csv_rows(obj.file, csv_info)
             table_name = create_database_table(
-                row_set,
+                prepared_csv['row_set'],
                 csv_info,
                 dataset_id,
-                additional_fields=additional_fields,
-                append=True
+                append=True,
+                additional_fields=additional_fields
             )
             self.populate_point_data(dataset_id, csv_info)
 
