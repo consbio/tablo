@@ -48,18 +48,22 @@ DATE_FORMATS = (
     '%y-%m-%d'
 )
 
+def clean_header_row(header):
+    # Strip Byte Order Mark from the beginning of the header row
+    return header.lstrip('\ufeff')
+
 
 def prepare_csv_rows(csv_file, csv_info=None):
     if isinstance(csv_file, str):
         with open(csv_file, 'r') as f:
-            header_line = [f.readline()]
+            header_line = [clean_header_row(f.readline())]
     elif isinstance(csv_file, (io.BufferedIOBase, io.StringIO)):
         csv_file.seek(0)
-        header_line = [csv_file.readline()]
+        header_line = [clean_header_row(csv_file.readline())]
         csv_file.seek(0)
     elif isinstance(csv_file, (FieldFile, io.BytesIO)):
         csv_file.seek(0)
-        header_line = [csv_file.readline().decode()]
+        header_line = [clean_header_row(csv_file.readline().decode())]
         csv_file.seek(0)
     else:
         raise TypeError('Invalid csv file')
