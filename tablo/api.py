@@ -367,6 +367,7 @@ class TemporaryFileResource(ModelResource):
                 {
                     "fieldNames": ["field one", "field two", "latitude", "longitude"],
                     "dataTypes": ["String", "Integer", "Decimal", "Decimal"],
+                    "optionalFields": ["field one"],
                     "xColumn": "longitude",
                     "yColumn": "latitude",
                     "filename": "uploaded.csv"
@@ -378,6 +379,9 @@ class TemporaryFileResource(ModelResource):
             **dataTypes**
                 A list of data types for each of the columns. The index of this list will match the index of the
                 fieldNames list.
+
+            **optionalFields**
+                A list of fields that had empty values, and are taken to be optional.
 
             **xColumn**
                 The best guess at which column contains X spatial coordinates.
