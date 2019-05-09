@@ -142,12 +142,8 @@ def infer_data_types(row_set):
 
 def get_date_fields(csv_info):
     fields = csv_info['fieldNames']
-    date_fields = []
-    for idx, data_type in enumerate(csv_info['dataTypes']):
-        data_type_lowered = data_type.lower()
-        if data_type_lowered == 'date':
-            date_fields.append(fields[idx])
-    return date_fields
+    data_types = csv_info['dataTypes']
+    return [fields[idx] for idx, dt in enumerate(data_types) if dt.lower() == 'date']
 
 
 def determine_optional_fields(row_set):

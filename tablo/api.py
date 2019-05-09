@@ -420,7 +420,7 @@ class TemporaryFileResource(ModelResource):
                 HttpBadRequest(
                     content=json.dumps(
                         derive_error_response_data(
-                            InvalidFileError('File is emtpy', lines=0),
+                            InvalidFileError('File is empty', lines=0),
                             code=BAD_DATA
                         )
                     ),

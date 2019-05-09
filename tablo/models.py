@@ -1025,8 +1025,8 @@ def create_aggregate_database_table(row, dataset_id):
             )
         )
         conn.execute(
-            'ALTER TABLE {} ALTER COLUMN {} SET DEFAULT nextval(\'{}\')'.format(
-                table_name, PRIMARY_KEY_NAME, sequence_name
+            'ALTER TABLE {table} ALTER COLUMN {key} SET DEFAULT nextval(\'{sequence}\')'.format(
+                table=table_name, key=PRIMARY_KEY_NAME, sequence=sequence_name
             )
         )
     return table_name
