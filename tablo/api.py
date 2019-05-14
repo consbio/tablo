@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 
 from django.conf.urls import url
 from django.core.exceptions import ObjectDoesNotExist
@@ -15,16 +14,13 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import determine_optional_fields, determine_x_and_y_fields, prepare_csv_rows
+from tablo.csv_utils import prepare_csv_rows
 from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
 from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
-from tablo.models import add_geometry_column, add_or_update_database_fields
+from tablo.models import add_geometry_column, populate_point_data, populate_aggregate_table
 from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
-from tablo.models import populate_aggregate_table, populate_data, populate_point_data
 
 logger = logging.getLogger(__name__)
-
-TYPE_REGEX = re.compile(r'\([^\)]*\)')
 
 
 class FeatureServiceResource(ModelResource):
@@ -329,12 +325,6 @@ class TemporaryFileResource(ModelResource):
         detail_uri_name = 'uuid'
         serializer = Serializer(formats=['json', 'jsonp'])
 
-    def _convert_number(self, number):
-        """Converts a number to float or int as appropriate"""
-
-        number = float(number)
-        return int(number) if number.is_integer() else float(number)
-
     def prepend_urls(self):
         return [
             url(
@@ -357,6 +347,12 @@ class TemporaryFileResource(ModelResource):
             )
         ]
 
+    def populate_point_data(self, dataset_id, csv_info):
+        srid = csv_info['srid']
+        x_column = csv_info['xColumn']
+        y_column = csv_info['yColumn']
+        populate_point_data(dataset_id, srid, x_column, y_column)
+
     def describe(self, request, **kwargs):
         """
         Describe, located at the ``{tablo-server}/api/v1/temporary-files/{uuid}/describe`` endpoint, will describe
@@ -370,7 +366,7 @@ class TemporaryFileResource(ModelResource):
 
                 {
                     "fieldNames": ["field one", "field two", "latitude", "longitude"],
-                    "dataTypes": ["String", "Integer", "Double", "Double"],
+                    "dataTypes": ["String", "Integer", "Decimal", "Decimal"],
                     "optionalFields": ["field one"],
                     "xColumn": "longitude",
                     "yColumn": "latitude",
@@ -414,24 +410,29 @@ class TemporaryFileResource(ModelResource):
                 content_type='application/json'
             ))
 
-        try:
-            row_set = prepare_csv_rows(obj.file)
-            sample_row = next(row_set.sample, None)
+        csv_info = json.loads(request.POST.get('csv_info') or '{}') or None
 
-            if sample_row is None:
-                raise InvalidFileError('File is empty', lines=0)
+        prepared_csv = prepare_csv_rows(obj.file, csv_info)
+        row_set = prepared_csv['row_set']
 
-        except InvalidFileError as e:
-            raise ImmediateHttpResponse(HttpBadRequest(
-                content=json.dumps(derive_error_response_data(e, code=BAD_DATA)),
-                content_type='application/json'
-            ))
+        if not len(row_set):
+            raise ImmediateHttpResponse(
+                HttpBadRequest(
+                    content=json.dumps(
+                        derive_error_response_data(
+                            InvalidFileError('File is empty', lines=0),
+                            code=BAD_DATA
+                        )
+                    ),
+                    content_type='application/json'
+                )
+            )
 
-        bundle.data['fieldNames'] = [cell.column for cell in sample_row]
-        bundle.data['dataTypes'] = [TYPE_REGEX.sub('', str(cell.type)) for cell in sample_row]
-        bundle.data['optionalFields'] = determine_optional_fields(row_set)
+        bundle.data['fieldNames'] = row_set.columns.to_list()
+        bundle.data['dataTypes'] = prepared_csv['data_types']
+        bundle.data['optionalFields'] = prepared_csv['optional_fields']
 
-        x_field, y_field = determine_x_and_y_fields(sample_row)
+        x_field, y_field = prepared_csv['coord_fields']
         if x_field and y_field:
             bundle.data['xColumn'] = x_field
             bundle.data['yColumn'] = y_field
@@ -462,7 +463,6 @@ class TemporaryFileResource(ModelResource):
                     {
                         "name": "field_name",
                         "type": "text",
-                        "value": "optional value",
                         "required": true
                     }
 
@@ -483,25 +483,24 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            # Use separate iterator of table rows to not exaust the main one
-            optional_fields = determine_optional_fields(prepare_csv_rows(obj.file))
+            prepared_csv = prepare_csv_rows(obj.file, csv_info)
 
-            row_set = prepare_csv_rows(obj.file, csv_info)
-            sample_row = next(row_set.sample)
-            table_name = create_database_table(sample_row, dataset_id, optional_fields=optional_fields)
-            bundle.data['table_name'] = table_name
-
-            populate_data(table_name, row_set)
-            add_or_update_database_fields(table_name, additional_fields)
+            table_name = create_database_table(
+                prepared_csv['row_set'],
+                csv_info,
+                dataset_id,
+                additional_fields=additional_fields
+            )
             add_geometry_column(dataset_id)
-            populate_point_data(dataset_id, csv_info)
+            self.populate_point_data(dataset_id, csv_info)
+
+            bundle.data['table_name'] = table_name
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
 
         except Exception as e:
             logger.exception(e)
 
-            # Likely coming from uploaded data sent to populate_data
             raise ImmediateHttpResponse(HttpBadRequest(
                 content=json.dumps(derive_error_response_data(e)),
                 content_type='application/json'
@@ -521,21 +520,23 @@ class TemporaryFileResource(ModelResource):
             csv_info = json.loads(request.POST.get('csv_info'))
             additional_fields = json.loads(request.POST.get('fields'))
 
-            row_set = prepare_csv_rows(obj.file)
-            sample_row = next(row_set.sample)
-            table_name = create_database_table(sample_row, dataset_id, append=True)
-            bundle.data['table_name'] = table_name
+            prepared_csv = prepare_csv_rows(obj.file, csv_info)
+            table_name = create_database_table(
+                prepared_csv['row_set'],
+                csv_info,
+                dataset_id,
+                append=True,
+                additional_fields=additional_fields
+            )
+            self.populate_point_data(dataset_id, csv_info)
 
-            add_or_update_database_fields(table_name, additional_fields)
-            populate_data(table_name, row_set)
-            populate_point_data(dataset_id, csv_info)
+            bundle.data['table_name'] = table_name
 
             obj.delete()  # Temporary file has been moved to database, safe to delete
 
         except Exception as e:
             logger.exception(e)
 
-            # Likely coming from uploaded data sent to populate_data
             raise ImmediateHttpResponse(HttpBadRequest(
                 content=json.dumps(derive_error_response_data(e)),
                 content_type='application/json'

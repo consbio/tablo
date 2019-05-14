@@ -40,7 +40,6 @@ Other Dependencies
 Tablo relies on a few libraries that can often be more difficult to install. These include:
 
 * pyproj (https://github.com/jswhit/pyproj)
-* lxml (via messytables) (http://lxml.de/)
 * GDAL (https://pypi.python.org/pypi/GDAL/)
 
 See these websites to install these libraries first, as they may depend on other executables existing in your

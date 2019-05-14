@@ -2,6 +2,26 @@ import json
 
 from collections import OrderedDict
 
+from django.db import connection
+
+from sqlalchemy import create_engine
+
+
+def get_sqlalchemy_engine():
+    """ Return a SQLAlchemy engine object from Django database settings """
+    settings = connection.settings_dict
+    user = settings.get('USER')
+    password = settings.get('PASSWORD')
+    if user and password:
+        db_auth = '{}:{}@'.format(user, password)
+    elif user:
+        db_auth = '{}@'.format(user)
+    else:
+        db_auth = ''
+    db_host = settings['HOST']
+    db_name = settings['NAME']
+    return create_engine('postgresql://{auth}{host}/{name}'.format(auth=db_auth, host=db_host, name=db_name))
+
 
 def dictfetchall(cursor):
     """ :return: all rows from a cursor as a dict """

@@ -3,7 +3,7 @@ from __future__ import unicode_literals
 
 from django.db import migrations
 
-from tablo.models import PRIMARY_KEY_NAME
+from tablo import PRIMARY_KEY_NAME
 
 
 def convert_to_bigint(apps, schema_editor):
