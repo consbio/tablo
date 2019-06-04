@@ -86,7 +86,8 @@ class FeatureService(models.Model):
                 new_table_name=new_table_name
             ))
 
-            c.execute('SELECT sequencename FROM pg_sequences WHERE sequencename LIKE \'%{}%\''.format(old_table_name))
+            # relkind `S` is for sequence
+            c.execute("SELECT relname FROM pg_class WHERE relkind = 'S' AND relname like '%{}%'".format(old_table_name))
             for (old_sequence_name,) in c.fetchall():
                 c.execute(
                     'ALTER SEQUENCE {} RENAME TO {}'.format(
@@ -95,7 +96,8 @@ class FeatureService(models.Model):
                     )
                 )
 
-            c.execute('SELECT indexname FROM pg_indexes WHERE indexname LIKE \'%{}%\''.format(old_table_name))
+            # relkind `i` is for index
+            c.execute("SELECT relname FROM pg_class WHERE relkind = 'i' AND relname like '%{}%'".format(old_table_name))
             for (old_index_name,) in c.fetchall():
                 c.execute(
                     'ALTER INDEX {} RENAME TO {}'.format(
