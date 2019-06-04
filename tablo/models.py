@@ -86,6 +86,24 @@ class FeatureService(models.Model):
                 new_table_name=new_table_name
             ))
 
+            c.execute('SELECT sequencename FROM pg_sequences WHERE sequencename LIKE \'%{}%\''.format(old_table_name))
+            for (old_sequence_name,) in c.fetchall():
+                c.execute(
+                    'ALTER SEQUENCE {} RENAME TO {}'.format(
+                        old_sequence_name,
+                        old_sequence_name.replace(old_table_name, new_table_name)
+                    )
+                )
+
+            c.execute('SELECT indexname FROM pg_indexes WHERE indexname LIKE \'%{}%\''.format(old_table_name))
+            for (old_index_name,) in c.fetchall():
+                c.execute(
+                    'ALTER INDEX {} RENAME TO {}'.format(
+                        old_index_name,
+                        old_index_name.replace(old_table_name, new_table_name)
+                    )
+                )
+
 
 class FeatureServiceLayer(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
@@ -991,34 +1009,46 @@ class Column(object):
 
 
 def create_aggregate_database_table(row, dataset_id):
+    # TODO optimize the aggregate pipeline: see https://github.com/consbio/tablo/pull/35 for the discussion on temp tables and whether `append` is needed with `create_database_table`
     columns = [convert_header_to_column_name(SOURCE_DATASET_FIELD_NAME)]
     data_types = ['String']
     optional_fields = []
     type_conversion = {
-        'decimal': 'Decimal',
+        'double': 'Decimal',
         'date': 'Date',
         'integer': 'Integer',
         'string': 'String',
         'xLocation': 'Decimal',
         'yLocation': 'Decimal',
-        'dropdownedit': 'String',
+        'dropdownEdit': 'String',
         'dropdown': 'String',
     }
+    date_fields = []
     for col in row:
         col_name = convert_header_to_column_name(col.column)
         columns.append(col_name)
         data_types.append(type_conversion[col.type])
+        if col.type == 'date':
+            date_fields.append(col_name)
         if hasattr(col, 'required') and not col.required:
             optional_fields.append(col_name)
     df = pd.DataFrame(columns=columns)
+    for field in date_fields:
+        df[field] = df[field].astype('datetime64')
     df_info = {
         'dataTypes': data_types,
         'optionalFields': optional_fields
     }
-    table_name = create_database_table(df, df_info, dataset_id)
+    table_name = create_database_table(df, df_info, dataset_id, append=True)
     with get_sqlalchemy_engine().connect() as conn:
         sequence_name = '{}_0_seq'.format(table_name)
-        conn.execute('CREATE SEQUENCE {}'.format(sequence_name))
+        conn.execute(
+            'CREATE SEQUENCE IF NOT EXISTS {sequence} OWNED BY {table_name}.{pk}'.format(
+                sequence=sequence_name,
+                table_name=table_name,
+                pk=PRIMARY_KEY_NAME
+            )
+        )
         conn.execute(
             'ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint'.format(
                 table=table_name, key=PRIMARY_KEY_NAME
@@ -1046,13 +1076,15 @@ def create_database_table(row_set, csv_info, dataset_id, append=False, additiona
 
     table_name = '{}{}{}'.format(TABLE_NAME_PREFIX, dataset_id, IMPORT_SUFFIX)
 
-    with get_sqlalchemy_engine().connect() as conn:
+    engine = get_sqlalchemy_engine()
+    with engine.connect() as conn:
         if not append:
             exists_op = 'replace'
         else:
             exists_op = 'append'
-            start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max()
-            row_set.index = row_set.index + start_index
+            if engine.has_table(table_name):
+                start_index = pd.read_sql(table_name, conn, columns=[PRIMARY_KEY_NAME])[PRIMARY_KEY_NAME].max()
+                row_set.index = row_set.index + start_index
 
         row_set.to_sql(
             table_name,
@@ -1075,23 +1107,29 @@ def create_database_table(row_set, csv_info, dataset_id, append=False, additiona
 def add_geometry_column(dataset_id, is_import=True):
 
     with connection.cursor() as c:
-        add_command = (
-            "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
-        ).format(
-            schema='public',
-            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=GEOM_FIELD_NAME,
-            srid=WEB_MERCATOR_SRID,
-            type='GEOMETRY',
-            dimension=2
+        table_name = '{}{}{}'.format(TABLE_NAME_PREFIX, dataset_id, (IMPORT_SUFFIX if is_import else ''))
+        check_column_query = "SELECT column_name FROM information_schema.columns WHERE table_name='{}' and column_name='{}'".format(
+            table_name, GEOM_FIELD_NAME
         )
-        c.execute(add_command)
+        c.execute(check_column_query)
+        if not c.fetchone():
+            add_command = (
+                "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
+            ).format(
+                schema='public',
+                table_name=table_name,
+                column_name=GEOM_FIELD_NAME,
+                srid=WEB_MERCATOR_SRID,
+                type='GEOMETRY',
+                dimension=2
+            )
+            c.execute(add_command)
 
-        index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
-            table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
-            column_name=GEOM_FIELD_NAME
-        )
-        c.execute(index_command)
+            index_command = 'CREATE INDEX {table_name}_geom_index ON {table_name} USING gist({column_name})'.format(
+                table_name=TABLE_NAME_PREFIX + dataset_id + (IMPORT_SUFFIX if is_import else ''),
+                column_name=GEOM_FIELD_NAME
+            )
+            c.execute(index_command)
 
 
 def get_fields(for_table):
