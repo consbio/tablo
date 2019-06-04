@@ -1047,9 +1047,7 @@ def create_aggregate_database_table(row, dataset_id):
         seq_check_query = "SELECT sequence_name FROM information_schema.sequences WHERE sequence_name = '{}'".format(
             sequence_name
         )
-        conn.execute(seq_check_query)
-        has_sequence = conn.fetchone()
-        if not has_sequence:
+        if not conn.execute(seq_check_query).fetchone():
             conn.execute(
                 'CREATE SEQUENCE {sequence} OWNED BY {table_name}.{pk}'.format(
                     sequence=sequence_name,
