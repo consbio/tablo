@@ -1044,13 +1044,19 @@ def create_aggregate_database_table(row, dataset_id):
     table_name = create_database_table(df, df_info, dataset_id, append=True)
     with get_sqlalchemy_engine().connect() as conn:
         sequence_name = '{}_0_seq'.format(table_name)
-        conn.execute(
-            'CREATE SEQUENCE IF NOT EXISTS {sequence} OWNED BY {table_name}.{pk}'.format(
-                sequence=sequence_name,
-                table_name=table_name,
-                pk=PRIMARY_KEY_NAME
-            )
+        seq_check_query = "SELECT sequence_name FROM information_schema.sequences WHERE sequence_name = '{}'".format(
+            sequence_name
         )
+        conn.execute(seq_check_query)
+        has_sequence = conn.fetchone()
+        if not has_sequence:
+            conn.execute(
+                'CREATE SEQUENCE {sequence} OWNED BY {table_name}.{pk}'.format(
+                    sequence=sequence_name,
+                    table_name=table_name,
+                    pk=PRIMARY_KEY_NAME
+                )
+            )
         conn.execute(
             'ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint'.format(
                 table=table_name, key=PRIMARY_KEY_NAME
