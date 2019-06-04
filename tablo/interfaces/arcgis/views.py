@@ -451,7 +451,6 @@ class QueryView(FeatureLayerView):
         elif kwargs.get('returnGeometry', 'true').lower() == 'false':
             search_params['return_geometry'] = False
 
-        query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)
         try:
             # Query with limit plus one to determine if the limit excluded any features
             query_response = self.feature_service_layer.perform_query(limit, offset, **search_params)

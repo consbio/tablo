@@ -1,14 +1,11 @@
+import csv
+import datetime
+import io
 import re
 
-from collections import defaultdict
-from messytables import CSVTableSet, headers_guess, offset_processor, types_processor
-from messytables import StringType, DecimalType, IntegerType, DateType, Cell
-from messytables.compat23 import unicode_string
-from messytables.dateparser import create_date_formats
-from messytables.types import CellType
+from django.db.models.fields.files import FieldFile
 
-from itertools import zip_longest
-
+import pandas as pd
 
 POSTGRES_KEYWORDS = [
     'all', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc',
@@ -32,109 +29,137 @@ X_AND_Y_FIELDS = (
     ('x_', 'y_')
 )
 
+DATE_FORMATS = (
+    '%m/%d/%Y',
+    '%m/%d/%y',
+    '%d/%m/%Y',
+    '%d/%m/%y',
+    '%m-%d-%Y',
+    '%m-%d-%y',
+    '%d-%m-%Y',
+    '%d-%m-%y',
+    '%Y/%d/%m',
+    '%y/%d/%m',
+    '%Y/%m/%d',
+    '%y/%m/%d',
+    '%Y-%d-%m',
+    '%y-%d-%m',
+    '%Y-%m-%d',
+    '%y-%m-%d'
+)
 
-class EmptyType(CellType):
-    """ An empty cell """
-
-    result_type = unicode_string
-    guessing_weight = 0
-
-    def cast(self, value):
-        if value is None:
-            return None
-        if isinstance(value, self.result_type):
-            return value
-        try:
-            return unicode_string(value)
-        except UnicodeEncodeError:
-            return str(value)
-
-
-# We never want Boolean types, so exclude it from the defaults
-TYPES = (EmptyType, StringType, DecimalType, IntegerType, DateType)
-TYPE_NAMES = {t: t.__name__[:-4] for t in TYPES}
+def clean_header_row(header):
+    # Strip Byte Order Mark from the beginning of the header row
+    return header.lstrip('\ufeff')
 
 
 def prepare_csv_rows(csv_file, csv_info=None):
-    row_set = CSVTableSet(csv_file).tables[0]
-
-    offset, headers = headers_guess(row_set.sample)
-    headers = [convert_header_to_column_name(header) for header in (h for h in headers if h)]
-
-    row_set.register_processor(headers_processor_remove_blank(headers))
-    row_set.register_processor(offset_processor(offset + 1))
-
-    DateType.formats = create_date_formats(day_first=False)
-
-    if csv_info:
-        types = types_from_config(row_set.sample, csv_info)
+    if isinstance(csv_file, str):
+        with open(csv_file, 'r') as f:
+            header_line = [clean_header_row(f.readline())]
+    elif isinstance(csv_file, (io.BufferedIOBase, io.StringIO)):
+        csv_file.seek(0)
+        header_line = [clean_header_row(csv_file.readline())]
+        csv_file.seek(0)
+    elif isinstance(csv_file, (FieldFile, io.BytesIO)):
+        csv_file.seek(0)
+        header_line = [clean_header_row(csv_file.readline().decode())]
+        csv_file.seek(0)
     else:
-        types = type_guess(row_set.sample, strict=True)
+        raise TypeError('Invalid csv file')
 
-    row_set.register_processor(types_processor(types))
+    reader = csv.reader(header_line)
+    headers = [c for c in next(reader) if c]  # remove empty column names
 
-    return row_set
-
-
-def types_from_config(rows, csv_info):
-    """
-    Determines the type of the columns based on the csvInfo.dataTypes.
-    This allows us to keep from guessing when the sender of the file knows more about the types than we do.
-    """
-
-    columns = []
-    convert_type = {
-        'integer': IntegerType,
-        'string': StringType,
-        'decimal': DecimalType,
-        'date': DateType,
-        'empty': StringType  # Sender doesn't know type either, default to String
+    kwargs = {
+        'usecols': headers,
+        'skip_blank_lines': True,
+        'skipinitialspace': True
     }
 
-    for row in rows:
-        for cell in row:
-            name_index = csv_info['fieldNames'].index(cell.column.lower())
-            data_type = convert_type[csv_info['dataTypes'][name_index].lower()]
-            if data_type == DateType:
-                columns.append(data_type(None))
-            else:
-                columns.append(data_type())
+    row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
 
-    return columns
+    row_set.rename(columns={c: convert_header_to_column_name(c) for c in row_set.columns}, inplace=True)
+
+    if csv_info:
+        date_fields = get_date_fields(csv_info)
+        for field in date_fields:
+            row_set[field] = row_set[field].astype('datetime64')
+
+    row_set.index += 1
+    data_types = infer_data_types(row_set)
+    optional_fields = determine_optional_fields(row_set)
+    x_field, y_field = determine_x_and_y_fields(row_set.columns)
+
+    return {
+        'row_set': row_set,
+        'data_types': data_types,
+        'optional_fields': optional_fields,
+        'coord_fields': (x_field, y_field)
+    }
 
 
-def convert_header_to_column_name(header):
-    converted_header = header.lower()
-    converted_header = converted_header.replace(' ', '_')
-    converted_header = converted_header.replace('-', '_')
-    converted_header = re.sub('\W', '', converted_header)
-    converted_header = converted_header.strip('_')
+def infer_data_types(row_set):
+    data_types = []
+    for c in row_set.columns:
+        column_series = row_set[c]
+        non_empty_rows = column_series[~column_series.isnull()]
+        if not len(non_empty_rows):
+            data_types.append('Empty')
+            continue
 
-    # Remove non-ascii characters
-    converted_header = re.sub('[^\x00-\x7f]', '', converted_header)
+        # If csv is loadded with csv_info, then given date columns are already parsed and we can continue
+        if column_series.dtype.name.lower().startswith('date'):
+            data_types.append('Date')
+            continue
 
-    if converted_header[0].isdigit():
-        converted_header = 'f_' + converted_header
-    if converted_header in POSTGRES_KEYWORDS:
-        converted_header += '_a'
+        first_value = column_series.loc[1]
+        is_date_type = False
 
-    return converted_header
+        for fmt in DATE_FORMATS:
+            try:
+                datetime.datetime.strptime(first_value, fmt)
+                is_date_type = True
+                data_types.append('Date')
+                break
+            except (ValueError, TypeError):
+                pass
+
+        if is_date_type:
+            continue
+
+        try:
+            data_type = pd.to_numeric(non_empty_rows).dtype.name.lower()
+            if 'int' in data_type:
+                data_types.append('Integer')
+            elif 'float' in data_type:
+                data_types.append('Decimal')
+        except ValueError:
+            data_types.append('String')
+
+    return data_types
+
+
+def get_date_fields(csv_info):
+    fields = csv_info['fieldNames']
+    data_types = csv_info['dataTypes']
+    return [fields[idx] for idx, dt in enumerate(data_types) if dt.lower() == 'date']
 
 
 def determine_optional_fields(row_set):
-    return set(c.column for r in row_set for c in r if c.empty)
+    return list(c for c in row_set.columns if row_set[c].isnull().values.any())
 
 
-def determine_x_and_y_fields(row):
+def determine_x_and_y_fields(columns):
     x_field = None
     y_field = None
 
     for x_guess, y_guess in X_AND_Y_FIELDS:
-        for cell in row:
-            if cell.column.startswith(x_guess):
-                x_field = cell.column
-            if cell.column.startswith(y_guess):
-                y_field = cell.column
+        for column in columns:
+            if column.lower().startswith(x_guess):
+                x_field = column
+            if column.lower().startswith(y_guess):
+                y_field = column
         if x_field and y_field:
             break
         else:
@@ -145,102 +170,41 @@ def determine_x_and_y_fields(row):
     return x_field, y_field
 
 
-def headers_processor_remove_blank(headers):
-    """
-    Removes any blank columns from the CSV file.
-    Essentially, if the header is blank, don't add the column value.
-    This prevents issues with blank columns in XLS and XLSX files.
-    """
+def convert_header_to_column_name(header):
+    converted_header = header.lower()
+    converted_header = converted_header.replace(' ', '_')
+    converted_header = converted_header.replace('-', '_')
+    converted_header = re.sub(r'\W', '', converted_header)
+    converted_header = converted_header.strip('_')
 
-    def apply_headers(row_set, row):
-        _row = []
-        pairs = zip_longest(row, headers)
-        for _, (cell, header) in enumerate(pairs):
-            if cell is None:
-                cell = Cell(None)
-            cell.column = header
-            if cell.column:
-                _row.append(cell)
-        return _row
+    # Remove non-ascii characters
+    converted_header = re.sub(r'[^\x00-\x7f]', '', converted_header)
 
-    return apply_headers
+    if converted_header[0].isdigit():
+        converted_header = 'f_' + converted_header
+    if converted_header in POSTGRES_KEYWORDS:
+        converted_header += '_a'
+
+    return converted_header
 
 
-def name_for_type(class_or_instance):
+def prepare_row_set_for_import(row_set, csv_info):
+    for idx, data_type in enumerate(row_set.dtypes):
+        if data_type.name == 'object':
+            column = row_set.columns[idx]
+            row_set[column] = row_set[column].str.strip()
 
-    if isinstance(class_or_instance, type):
-        type_name = TYPE_NAMES.get(class_or_instance)
-    elif isinstance(class_or_instance, CellType):
-        type_name = TYPE_NAMES.get(class_or_instance.__class__)
-    elif isinstance(class_or_instance, Cell):
-        type_name = TYPE_NAMES.get(class_or_instance.type.__class__)
+    for idx, column in enumerate(row_set.columns):
+        # We do not need to update date fields, because they are parsed by pandas on import
+        csv_data_type = csv_info['dataTypes'][idx].lower()
+        if csv_data_type == 'integer':
+            # Determine the smallest int type and use the relevant pandas nullable integer type
+            non_empty_rows = row_set[column][~row_set[column].isnull()]
+            int_type = pd.to_numeric(non_empty_rows, downcast='integer').dtype.name
+            row_set[column] = pd.to_numeric(row_set[column]).astype(int_type.capitalize())
+        elif csv_data_type == 'decimal':
+            row_set[column] = pd.to_numeric(row_set[column], downcast='float')
+        elif csv_data_type in ('string', 'empty'):
+            row_set[column] = row_set[column].str.strip()
 
-    return type_name or '?'
-
-
-def type_guess(rows, types=TYPES, strict=False):
-    """
-    This is a modified version of the messyTables type_guess function.
-    The modified version uses the EmptyType to signify that the field itself is empty.
-    This allows us to differentitate between a field that had some String values and a field that had no values.
-
-    The type guesser aggregates the number of successful conversions of each column to each type,
-    weights them by a fixed type priority and selects the most probable type for each column based on that figure.
-    It returns a list of ``CellType``. Empty cells are ignored.
-
-    Strict means that a type will not be guessed if parsing fails for a single cell in the column.
-    """
-
-    type_instances = [i for t in types for i in t.instances()]
-    guesses = []
-
-    if strict:
-        at_least_one_value = []
-        for _, row in enumerate(rows):
-            diff = len(row) - len(guesses)
-            for _ in range(diff):
-                typesdict = {}
-                for data_type in type_instances:
-                    typesdict[data_type] = 0
-                guesses.append(typesdict)
-                at_least_one_value.append(False)
-            for ci, cell in enumerate(row):
-                if not cell.value:
-                    continue
-                at_least_one_value[ci] = True
-                for data_type in list(guesses[ci].keys()):
-                    if not data_type.test(cell.value):
-                        guesses[ci].pop(data_type)
-        # no need to set guessing weights before this
-        # because we only accept a data_type if it never fails
-        for i, guess in enumerate(guesses):
-            for data_type in guess:
-                guesses[i][data_type] = data_type.guessing_weight
-        # in case there were no values at all in the column,
-        # we set the guessed data_type to empty
-        for i, v in enumerate(at_least_one_value):
-            if not v:
-                guesses[i] = {EmptyType(): 0}
-    else:
-        for i, row in enumerate(rows):
-            diff = len(row) - len(guesses)
-            for _ in range(diff):
-                guesses.append(defaultdict(int))
-            for i, cell in enumerate(row):
-                # add empty guess so that we have at least one guess
-                guesses[i][EmptyType()] = guesses[i].get(EmptyType(), 0)
-                if not cell.value:
-                    continue
-                for data_type in type_instances:
-                    if data_type.test(cell.value):
-                        guesses[i][data_type] += data_type.guessing_weight
-    columns = []
-    for guess in guesses:
-        # this first creates an array of tuples because we want the types to be
-        # sorted. Even though it is not specified, python chooses the first
-        # element in case of a tie
-        # See: http://stackoverflow.com/a/6783101/214950
-        guesses_tuples = [(t, guess[t]) for t in type_instances if t in guess]
-        columns.append(max(guesses_tuples, key=lambda t_n: t_n[1])[0])
-
-    return columns
+    return row_set
