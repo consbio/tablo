@@ -86,7 +86,8 @@ class FeatureService(models.Model):
                 new_table_name=new_table_name
             ))
 
-            c.execute('SELECT sequencename FROM pg_sequences WHERE sequencename LIKE \'%{}%\''.format(old_table_name))
+            # relkind `S` is for sequence
+            c.execute("SELECT relname FROM pg_class WHERE relkind = 'S' AND relname like '%{}%'".format(old_table_name))
             for (old_sequence_name,) in c.fetchall():
                 c.execute(
                     'ALTER SEQUENCE {} RENAME TO {}'.format(
@@ -95,7 +96,8 @@ class FeatureService(models.Model):
                     )
                 )
 
-            c.execute('SELECT indexname FROM pg_indexes WHERE indexname LIKE \'%{}%\''.format(old_table_name))
+            # relkind `i` is for index
+            c.execute("SELECT relname FROM pg_class WHERE relkind = 'i' AND relname like '%{}%'".format(old_table_name))
             for (old_index_name,) in c.fetchall():
                 c.execute(
                     'ALTER INDEX {} RENAME TO {}'.format(
@@ -1042,13 +1044,17 @@ def create_aggregate_database_table(row, dataset_id):
     table_name = create_database_table(df, df_info, dataset_id, append=True)
     with get_sqlalchemy_engine().connect() as conn:
         sequence_name = '{}_0_seq'.format(table_name)
-        conn.execute(
-            'CREATE SEQUENCE IF NOT EXISTS {sequence} OWNED BY {table_name}.{pk}'.format(
-                sequence=sequence_name,
-                table_name=table_name,
-                pk=PRIMARY_KEY_NAME
-            )
+        seq_check_query = "SELECT sequence_name FROM information_schema.sequences WHERE sequence_name = '{}'".format(
+            sequence_name
         )
+        if not conn.execute(seq_check_query).fetchone():
+            conn.execute(
+                'CREATE SEQUENCE {sequence} OWNED BY {table_name}.{pk}'.format(
+                    sequence=sequence_name,
+                    table_name=table_name,
+                    pk=PRIMARY_KEY_NAME
+                )
+            )
         conn.execute(
             'ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint'.format(
                 table=table_name, key=PRIMARY_KEY_NAME
