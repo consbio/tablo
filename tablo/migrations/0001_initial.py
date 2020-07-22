@@ -42,7 +42,7 @@ class Migration(migrations.Migration):
                 ('time_interval', models.TextField(null=True)),
                 ('time_interval_units', models.CharField(max_length=255, null=True)),
                 ('drawing_info', models.TextField()),
-                ('service', models.ForeignKey(to='tablo.FeatureService')),
+                ('service', models.ForeignKey(to='tablo.FeatureService', on_delete=models.CASCADE)),
             ],
         ),
     ]

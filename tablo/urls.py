@@ -13,6 +13,8 @@ api.register(FeatureServiceLayerResource())
 api.register(FeatureServiceLayerRelationsResource())
 api.register(TemporaryFileResource())
 
+app_name = 'tablo'
+
 urlpatterns = [
     url(r'^api/', include(api.urls)),
     url(r'^tablo/arcgis/', include(arcgis_urls)),

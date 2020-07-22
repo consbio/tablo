@@ -19,7 +19,7 @@ class Migration(migrations.Migration):
                 ('related_title', models.CharField(max_length=255)),
                 ('source_column', models.CharField(max_length=255)),
                 ('target_column', models.CharField(max_length=255)),
-                ('layer', models.ForeignKey(to='tablo.FeatureServiceLayer')),
+                ('layer', models.ForeignKey(to='tablo.FeatureServiceLayer', on_delete=models.CASCADE)),
             ],
         ),
     ]

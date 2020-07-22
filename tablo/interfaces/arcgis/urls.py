@@ -3,6 +3,7 @@ from django.conf.urls import include, url
 from tablo.interfaces.arcgis.views import FeatureServiceDetailView, FeatureServiceLayerDetailView, GenerateRendererView
 from tablo.interfaces.arcgis.views import QueryView, TimeQueryView, ImageView
 
+
 urlpatterns = [
     url(
         r'rest/services/(?P<service_id>[\w\-@\._]+)/FeatureServer/?',

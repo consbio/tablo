@@ -87,7 +87,9 @@ class FeatureService(models.Model):
             ))
 
             # relkind `S` is for sequence
-            c.execute("SELECT relname FROM pg_class WHERE relkind = 'S' AND relname like '%{}%'".format(old_table_name))
+            c.execute(
+                "SELECT relname FROM pg_class WHERE relkind = 'S' AND relname like '%{}%'".format(old_table_name)
+            )
             for (old_sequence_name,) in c.fetchall():
                 c.execute(
                     'ALTER SEQUENCE {} RENAME TO {}'.format(
@@ -97,7 +99,9 @@ class FeatureService(models.Model):
                 )
 
             # relkind `i` is for index
-            c.execute("SELECT relname FROM pg_class WHERE relkind = 'i' AND relname like '%{}%'".format(old_table_name))
+            c.execute(
+                "SELECT relname FROM pg_class WHERE relkind = 'i' AND relname like '%{}%'".format(old_table_name)
+            )
             for (old_index_name,) in c.fetchall():
                 c.execute(
                     'ALTER INDEX {} RENAME TO {}'.format(
@@ -109,7 +113,7 @@ class FeatureService(models.Model):
 
 class FeatureServiceLayer(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
-    service = models.ForeignKey(FeatureService)
+    service = models.ForeignKey(FeatureService, on_delete=models.CASCADE)
     layer_order = models.IntegerField()
     table = models.CharField(max_length=255)
     name = models.CharField(max_length=255, null=True)
@@ -376,7 +380,9 @@ class FeatureServiceLayer(models.Model):
                     where_clause += ' AND {time_field} = %s::date'.format(time_field=layer_time_field)
                     query_params.append(start_time)
                 else:
-                    where_clause += ' AND {time_field} BETWEEN %s::date AND %s::date'.format(time_field=layer_time_field)
+                    where_clause += ' AND {time_field} BETWEEN %s::date AND %s::date'.format(
+                        time_field=layer_time_field
+                    )
                     query_params.append(start_time)
                     query_params.append(end_time)
             elif where is None and not count_only:
@@ -865,7 +871,7 @@ class FeatureServiceLayer(models.Model):
 
 class FeatureServiceLayerRelations(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
-    layer = models.ForeignKey(FeatureServiceLayer)
+    layer = models.ForeignKey(FeatureServiceLayer, on_delete=models.CASCADE)
     related_index = models.PositiveIntegerField(default=0)
     related_title = models.CharField(max_length=255)
     source_column = models.CharField(max_length=255)
@@ -1011,7 +1017,9 @@ class Column(object):
 
 
 def create_aggregate_database_table(row, dataset_id):
-    # TODO optimize the aggregate pipeline: see https://github.com/consbio/tablo/pull/35 for the discussion on temp tables and whether `append` is needed with `create_database_table`
+    # TODO optimize the aggregate pipeline
+    # SEE:https://github.com/consbio/tablo/pull/35 for the discussion on temp tables
+    #     and whether `append` is needed with `create_database_table`
     columns = [convert_header_to_column_name(SOURCE_DATASET_FIELD_NAME)]
     data_types = ['String']
     optional_fields = []
@@ -1114,10 +1122,8 @@ def add_geometry_column(dataset_id, is_import=True):
 
     with connection.cursor() as c:
         table_name = '{}{}{}'.format(TABLE_NAME_PREFIX, dataset_id, (IMPORT_SUFFIX if is_import else ''))
-        check_column_query = "SELECT column_name FROM information_schema.columns WHERE table_name='{}' and column_name='{}'".format(
-            table_name, GEOM_FIELD_NAME
-        )
-        c.execute(check_column_query)
+        col_exists = "SELECT column_name FROM information_schema.columns WHERE table_name='{}' and column_name='{}'"
+        c.execute(col_exists.format(table_name, GEOM_FIELD_NAME))
         if not c.fetchone():
             add_command = (
                 "SELECT AddGeometryColumn ('{schema}', '{table_name}', '{column_name}', {srid}, '{type}', {dimension})"
