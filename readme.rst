@@ -1,11 +1,15 @@
 Tablo
 ===========
 
-.. image:: https://travis-ci.org/consbio/tablo.svg?branch=master
-    :target: https://travis-ci.org/consbio/tablo
+.. image:: https://travis-ci.org/consbio/tablo.svg?branch=main
+    :target: https://travis-ci.org/consbio/tablo?branch=main
 
-.. image:: https://readthedocs.org/projects/tablo/badge/?version=latest
-    :target: http://tablo.readthedocs.io/en/latest/?badge=latest
+.. image:: https://coveralls.io/repos/github/consbio/tablo/badge.svg?branch=main
+    :target: https://coveralls.io/github/consbio/tablo?branch=main
+
+.. image:: https://readthedocs.org/projects/tablo/badge/?version=latest&branch=main
+    :target: http://tablo.readthedocs.io/en/latest/?badge=latest&branch=main
+
 
 What is Tablo?
 --------------
@@ -44,10 +48,10 @@ This allows us to take a CSV file like this:
 
 And turn it into a map like this:
 
-    .. image:: https://github.com/consbio/tablo/blob/master/docs/_static/images/sample_map.png
+    .. image:: https://github.com/consbio/tablo/blob/main/docs/_static/images/sample_map.png
 
 
 Documentation
-------------- 
+-------------
 
 Full documentation available `here <http://tablo.readthedocs.io/en/latest/>`_.
