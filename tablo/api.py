@@ -14,11 +14,11 @@ from tastypie.resources import ModelResource
 from tastypie.serializers import Serializer
 from tastypie.utils import trailing_slash
 
-from tablo.csv_utils import prepare_csv_rows
-from tablo.exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
-from tablo.models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
-from tablo.models import add_geometry_column, populate_point_data, populate_aggregate_table
-from tablo.models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
+from .csv_utils import prepare_csv_rows
+from .exceptions import BAD_DATA, derive_error_response_data, InvalidFileError
+from .models import Column, FeatureService, FeatureServiceLayer, FeatureServiceLayerRelations, TemporaryFile
+from .models import add_geometry_column, populate_point_data, populate_aggregate_table
+from .models import copy_data_table_for_import, create_aggregate_database_table, create_database_table
 
 logger = logging.getLogger(__name__)
 

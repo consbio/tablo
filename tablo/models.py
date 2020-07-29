@@ -20,14 +20,14 @@ from geoalchemy2 import Geometry
 from PIL import Image, ImageOps
 from sqlparse.tokens import Token
 
-from tablo import wkt, LARGE_IMAGE_NAME, NO_PK, PANDAS_TYPE_CONVERSION, POSTGIS_ESRI_FIELD_MAPPING, IMPORT_SUFFIX
-from tablo import TABLE_NAME_PREFIX, PRIMARY_KEY_NAME, GEOM_FIELD_NAME, SOURCE_DATASET_FIELD_NAME, WEB_MERCATOR_SRID
-from tablo import ADJUSTED_GLOBAL_EXTENT
-from tablo.csv_utils import prepare_row_set_for_import, convert_header_to_column_name
-from tablo.exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
-from tablo.geom_utils import Extent, SpatialReference
-from tablo.utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
-from tablo.storage import default_public_storage as image_storage
+from . import wkt, LARGE_IMAGE_NAME, NO_PK, PANDAS_TYPE_CONVERSION, POSTGIS_ESRI_FIELD_MAPPING, IMPORT_SUFFIX
+from . import TABLE_NAME_PREFIX, PRIMARY_KEY_NAME, GEOM_FIELD_NAME, SOURCE_DATASET_FIELD_NAME, WEB_MERCATOR_SRID
+from . import ADJUSTED_GLOBAL_EXTENT
+from .csv_utils import prepare_row_set_for_import, convert_header_to_column_name
+from .exceptions import InvalidFieldsError, InvalidSQLError, RelatedFieldsError
+from .geom_utils import Extent, SpatialReference
+from .storage import default_public_storage as image_storage
+from .utils import get_jenks_breaks, get_sqlalchemy_engine, dictfetchall
 
 
 TEMPORARY_FILE_LOCATION = getattr(settings, 'TABLO_TEMPORARY_FILE_LOCATION', 'temp')

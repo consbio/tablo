@@ -1,9 +1,10 @@
 import json
 import shutil
 import tempfile
-import six
 
 from urllib.error import URLError
+from urllib.parse import unquote
+from urllib.request import urlopen
 
 from django.core.files import File
 from django.http import HttpResponseBadRequest, HttpResponse
@@ -13,8 +14,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import View
 from django.views.generic.edit import ProcessFormView, FormMixin
 
-from tablo.forms import TemporaryFileForm
-from tablo.models import TemporaryFile
+from .forms import TemporaryFileForm
+from .models import TemporaryFile
 
 
 class TemporaryFileUploadViewBase(View):
@@ -88,7 +89,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
 
     def download_file(self, url):
 
-        url_f = six.moves.urllib.request.urlopen(url)
+        url_f = urlopen(url)
 
         filename = url.split('?', 1)[0].split('/')[-1]
         if 'filename=' in url_f.info().get('Content-Disposition', ''):
@@ -111,7 +112,7 @@ class TemporaryFileUploadUrlView(TemporaryFileUploadViewBase):
             return HttpResponseBadRequest('Missing URL')
 
         return self.process_temporary_file(
-            self.download_file(six.moves.urllib.parse.unquote(request.GET.get('url')))
+            self.download_file(unquote(request.GET.get('url')))
         )
 
     def post(self, request):

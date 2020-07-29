@@ -1,6 +1,6 @@
 import numpy as np
 
-from tablo.geom_utils import Extent
+from .geom_utils import Extent
 
 LARGE_IMAGE_NAME = 'fullsize.jpg'
 

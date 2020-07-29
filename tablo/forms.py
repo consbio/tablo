@@ -1,5 +1,5 @@
 from django.forms import ModelForm
-from tablo.models import TemporaryFile
+from .models import TemporaryFile
 
 
 class TemporaryFileForm(ModelForm):

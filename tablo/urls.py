@@ -1,10 +1,10 @@
 from django.conf.urls import include, url
 from tastypie.api import Api
 
-from tablo.api import FeatureServiceResource, FeatureServiceLayerResource, FeatureServiceLayerRelationsResource
-from tablo.api import TemporaryFileResource
-from tablo.interfaces.arcgis import urls as arcgis_urls
-from tablo.views import TemporaryFileUploadFormView, TemporaryFileUploadUrlView
+from .api import FeatureServiceResource, FeatureServiceLayerResource, FeatureServiceLayerRelationsResource
+from .api import TemporaryFileResource
+from .views import TemporaryFileUploadFormView, TemporaryFileUploadUrlView
+from .interfaces.arcgis import urls as arcgis_urls
 
 
 api = Api(api_name='v1')

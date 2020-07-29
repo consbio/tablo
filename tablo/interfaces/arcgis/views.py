@@ -32,11 +32,10 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.generic import DetailView, View
 from django.conf import settings
 
-from tablo.storage import default_public_storage as image_storage
-
 from tablo import wkt, LARGE_IMAGE_NAME
 from tablo.geom_utils import Extent
 from tablo.models import FeatureService, FeatureServiceLayer
+from tablo.storage import default_public_storage as image_storage
 from tablo.utils import json_date_serializer
 
 
