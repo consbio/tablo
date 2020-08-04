@@ -7,6 +7,7 @@ from django.http import Http404
 from tastypie import fields
 from tastypie.authentication import MultiAuthentication, SessionAuthentication, ApiKeyAuthentication
 from tastypie.authorization import DjangoAuthorization
+from tastypie.compat import NoReverseMatch
 from tastypie.constants import ALL
 from tastypie.exceptions import ImmediateHttpResponse
 from tastypie.http import HttpBadRequest
@@ -23,7 +24,21 @@ from .models import copy_data_table_for_import, create_aggregate_database_table,
 logger = logging.getLogger(__name__)
 
 
-class FeatureServiceResource(ModelResource):
+class TabloModelResource(ModelResource):
+
+    def get_resource_uri(self, bundle_or_obj=None, url_name='tablo:api_dispatch_list'):
+        """ Overridden to prefix default url_name with 'tablo:' """
+
+        if bundle_or_obj is not None:
+            url_name = 'tablo:api_dispatch_detail'
+
+        try:
+            return self._build_reverse_url(url_name, kwargs=self.resource_uri_kwargs(bundle_or_obj))
+        except NoReverseMatch:
+            return ''
+
+
+class FeatureServiceResource(TabloModelResource):
     """
     The FeatureService resource, located at ``{tablo_server}/api/v1/featureservice``, allows you to create, edit
     and delete feature services within Tablo.
@@ -72,8 +87,6 @@ class FeatureServiceResource(ModelResource):
 
     `drawing_info` contains ESRI styling for the FeatureService geometry type.
     The creation will return a URL that will contain the Service ID of your newly created feature service.
-
-
     """
 
     layers = fields.ToManyField(
@@ -93,6 +106,9 @@ class FeatureServiceResource(ModelResource):
         queryset = FeatureService.objects.all()
         authentication = MultiAuthentication(SessionAuthentication(), ApiKeyAuthentication())
         authorization = DjangoAuthorization()
+
+    def post_list(self, request, **kwargs):
+        return super(FeatureServiceResource, self).post_list(request, **kwargs)
 
     def prepend_urls(self):
         return [
@@ -273,7 +289,7 @@ class FeatureServiceResource(ModelResource):
         return self.create_response(request, response_obj)
 
 
-class FeatureServiceLayerRelationsResource(ModelResource):
+class FeatureServiceLayerRelationsResource(TabloModelResource):
 
     layer_id = fields.IntegerField(attribute='layer_id', readonly=True)
     field_defs = fields.ListField(attribute='fields', readonly=True)
@@ -289,7 +305,7 @@ class FeatureServiceLayerRelationsResource(ModelResource):
         authorization = DjangoAuthorization()
 
 
-class FeatureServiceLayerResource(ModelResource):
+class FeatureServiceLayerResource(TabloModelResource):
 
     service = fields.ToOneField(FeatureServiceResource, attribute='service', full=False)
     field_defs = fields.ListField(attribute='fields', readonly=True)
@@ -311,7 +327,7 @@ class FeatureServiceLayerResource(ModelResource):
         authorization = DjangoAuthorization()
 
 
-class TemporaryFileResource(ModelResource):
+class TemporaryFileResource(TabloModelResource):
     uuid = fields.CharField(attribute='uuid', readonly=True)
 
     class Meta:

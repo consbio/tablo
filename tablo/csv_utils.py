@@ -48,6 +48,7 @@ DATE_FORMATS = (
     '%y-%m-%d'
 )
 
+
 def clean_header_row(header):
     # Strip Byte Order Mark from the beginning of the header row
     return header.lstrip('\ufeff')
