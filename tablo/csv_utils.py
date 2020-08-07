@@ -79,7 +79,7 @@ def prepare_csv_rows(csv_file, csv_info=None):
     }
 
     row_set = pd.read_csv(csv_file, dtype='object', **kwargs)
-
+    row_set.dropna(how="all", inplace=True)
     row_set.rename(columns={c: convert_header_to_column_name(c) for c in row_set.columns}, inplace=True)
 
     if csv_info:
