@@ -2,9 +2,17 @@ import numpy as np
 
 from .geom_utils import Extent
 
-LARGE_IMAGE_NAME = 'fullsize.jpg'
 
+__VERSION__ = '2.0'
+
+GEOM_FIELD_NAME = 'dbasin_geom'
+IMPORT_SUFFIX = '_import'
+LARGE_IMAGE_NAME = 'fullsize.jpg'
 NO_PK = 'NO_PK'
+PRIMARY_KEY_NAME = 'db_id'
+SOURCE_DATASET_FIELD_NAME = 'source_dataset'
+TABLE_NAME_PREFIX = 'db_'
+WEB_MERCATOR_SRID = 3857
 
 PANDAS_TYPE_CONVERSION = {
     'decimal': np.float64,
@@ -20,7 +28,6 @@ PANDAS_TYPE_CONVERSION = {
     'text': np.str,
     'timestamp': np.datetime64
 }
-
 POSTGIS_ESRI_FIELD_MAPPING = {
     'bigint': 'esriFieldTypeInteger',
     'smallint': 'esriFieldTypeSmallInteger',
@@ -37,13 +44,6 @@ POSTGIS_ESRI_FIELD_MAPPING = {
     'Unknown': 'esriFieldTypeString',
     'OID': 'esriFieldTypeOID',
 }
-
-IMPORT_SUFFIX = '_import'
-TABLE_NAME_PREFIX = 'db_'
-PRIMARY_KEY_NAME = 'db_id'
-GEOM_FIELD_NAME = 'dbasin_geom'
-SOURCE_DATASET_FIELD_NAME = 'source_dataset'
-WEB_MERCATOR_SRID = 3857
 
 # Adjusted global extent -- adjusted to better fit screen layout. Same as mapController.getAdjustedGlobalExtent().
 ADJUSTED_GLOBAL_EXTENT = Extent({
