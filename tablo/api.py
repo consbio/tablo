@@ -142,20 +142,23 @@ class FeatureServiceResource(TabloModelResource):
         It is accessed with a **service_id** parameter specifying the ID of the service you want to finalize.
         """
 
+        service_id = kwargs['service_id']
         try:
-            service = FeatureService.objects.get(id=kwargs['service_id'])
+            service = FeatureService.objects.get(id=service_id)
         except ObjectDoesNotExist:
-            return Http404()
+            raise Http404('Invalid feature service id during finalize: {}'.format(service_id))
 
         service.finalize(service.dataset_id)
 
         return self.create_response(request, {'status': 'good'})
 
     def copy(self, request, **kwargs):
+
+        service_id = kwargs['service_id']
         try:
-            service = FeatureService.objects.get(id=kwargs['service_id'])
+            service = FeatureService.objects.get(id=service_id)
         except ObjectDoesNotExist:
-            return Http404()
+            raise Http404('Invalid feature service id during copy: {}'.format(service_id))
 
         table_name = copy_data_table_for_import(service.dataset_id)
 
@@ -181,10 +184,12 @@ class FeatureServiceResource(TabloModelResource):
         })
 
     def combine_tables(self, request, **kwargs):
+
+        service_id = kwargs['service_id']
         try:
-            service = FeatureService.objects.get(id=kwargs['service_id'])
+            service = FeatureService.objects.get(id=service_id)
         except ObjectDoesNotExist:
-            return Http404()
+            raise Http404('Invalid feature service id during combine_tables: {}'.format(service_id))
 
         columns = json.loads(request.POST.get('columns'))
         row_columns = [Column(column=col['name'], type=col['type'], required=col['required']) for col in columns]
@@ -203,10 +208,11 @@ class FeatureServiceResource(TabloModelResource):
 
     def apply_edits(self, request, **kwargs):
 
+        service_id = kwargs['service_id']
         try:
-            service = FeatureService.objects.get(id=kwargs['service_id'])
+            service = FeatureService.objects.get(id=service_id)
         except ObjectDoesNotExist:
-            return Http404()
+            raise Http404('Invalid feature service id during apply_edits: {}'.format(service_id))
 
         adds = json.loads(request.POST.get('adds', '[]'))
         updates = json.loads(request.POST.get('updates', '[]'))
