@@ -3,7 +3,7 @@ import numpy as np
 from .geom_utils import Extent
 
 
-__VERSION__ = '2.0'
+__VERSION__ = '2.1'
 
 GEOM_FIELD_NAME = 'dbasin_geom'
 IMPORT_SUFFIX = '_import'
