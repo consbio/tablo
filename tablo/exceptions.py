@@ -46,6 +46,7 @@ def derive_error_response_data(e, code=UNKNOWN_ERROR):
     """ Inspects error message to derive error codes and info """
 
     error_msg = error_to_string(e)
+    error_text = error_msg.lower()
     error_json = {'error_code': code, 'underlying': error_msg}
 
     if getattr(e, 'fields', None) is not None:
@@ -53,13 +54,13 @@ def derive_error_response_data(e, code=UNKNOWN_ERROR):
     if getattr(e, 'file_info', None) is not None:
         error_json['file_info'] = e.file_info
 
-    if 'transform' in error_msg:
+    if 'transform' in error_text:
         error_json['error_code'] = TRANSFORM
-
-    elif 'column' in error_msg and 'specified more than once' in error_msg:
+    elif 'column' in error_text and 'specified more than once' in error_text:
         error_json['error_code'] = DUPLICATE_COLUMN
-
-    elif 'invalid input syntax' in error_msg:
+    elif 'out of range' in error_text:
+        error_json['error_code'] = BAD_DATA
+    elif 'invalid input syntax' in error_text:
         error_json['error_code'] = BAD_DATA
 
         try:
