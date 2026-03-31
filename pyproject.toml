@@ -1,6 +1,6 @@
 [project]
 name = "tablo"
-version = "0.1.0"
+version = "3.0.0"
 description = "A PostGIS table to feature service app for Django"
 readme = "readme.rst"
 requires-python = "==3.11.*"
