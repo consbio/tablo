@@ -1,4 +1,4 @@
-from django.conf.urls import include, url
+from django.urls import include, path
 from tastypie.api import Api
 
 from .api import FeatureServiceResource, FeatureServiceLayerResource, FeatureServiceLayerRelationsResource
@@ -16,8 +16,16 @@ api.register(TemporaryFileResource())
 app_name = 'tablo'
 
 urlpatterns = [
-    url(r'^api/', include(api.urls)),
-    url(r'^tablo/arcgis/', include(arcgis_urls)),
-    url(r'^tablo/admin/upload-by-url/$', TemporaryFileUploadUrlView.as_view(), name='tablo_admin_upload_by_url'),
-    url(r'^tablo/admin/upload/$', TemporaryFileUploadFormView.as_view(), name='tablo_admin_upload')
+    path("api/", include(api.urls)),
+    path("tablo/arcgis/", include(arcgis_urls)),
+    path(
+        "tablo/admin/upload-by-url/",
+        TemporaryFileUploadUrlView.as_view(),
+        name="tablo_admin_upload_by_url",
+    ),
+    path(
+        "tablo/admin/upload/",
+        TemporaryFileUploadFormView.as_view(),
+        name="tablo_admin_upload",
+    ),
 ]

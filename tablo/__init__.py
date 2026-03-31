@@ -18,14 +18,14 @@ PANDAS_TYPE_CONVERSION = {
     'decimal': np.float64,
     'date': np.datetime64,
     'integer': np.int64,
-    'string': np.str,
+    "string": str,
     'xlocation': np.float64,
     'ylocation': np.float64,
-    'dropdownedit': np.str,
-    'dropdown': np.str,
+    "dropdownedit": str,
+    "dropdown": str,
     'double': np.float64,
-    'image': np.str,
-    'text': np.str,
+    "image": str,
+    "text": str,
     'timestamp': np.datetime64
 }
 POSTGIS_ESRI_FIELD_MAPPING = {

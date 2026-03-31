@@ -1,7 +1,7 @@
 import json
 import logging
 
-from django.conf.urls import url
+from django.urls import re_path
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import Http404
 from tastypie import fields
@@ -112,26 +112,34 @@ class FeatureServiceResource(TabloModelResource):
 
     def prepend_urls(self):
         return [
-            url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/finalize'.format(
+            re_path(
+                r"^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/finalize".format(
                     self._meta.resource_name
-                ), self.wrap_view('finalize'), name="api_featureservice_finalize"
+                ),
+                self.wrap_view("finalize"),
+                name="api_featureservice_finalize",
             ),
-            url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/copy'.format(
+            re_path(
+                r"^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/copy".format(
                     self._meta.resource_name
-                ), self.wrap_view('copy'), name="api_featureservice_copy"
+                ),
+                self.wrap_view("copy"),
+                name="api_featureservice_copy",
             ),
-            url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine-tables'.format(
+            re_path(
+                r"^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/combine-tables".format(
                     self._meta.resource_name
-                ), self.wrap_view('combine_tables'), name="api_featureservice_combine_tables"
+                ),
+                self.wrap_view("combine_tables"),
+                name="api_featureservice_combine_tables",
             ),
-            url(
-                r'^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply-edits'.format(
+            re_path(
+                r"^(?P<resource_name>{0})/(?P<service_id>[\w\-@\._]+)/apply-edits".format(
                     self._meta.resource_name
-                ), self.wrap_view('apply_edits'), name="api_featureservice_apply_edits"
-            )
+                ),
+                self.wrap_view("apply_edits"),
+                name="api_featureservice_apply_edits",
+            ),
         ]
 
     def finalize(self, request, **kwargs):
@@ -349,24 +357,36 @@ class TemporaryFileResource(TabloModelResource):
 
     def prepend_urls(self):
         return [
-            url(
-                r"^(?P<resource_name>%s)/(?P<%s>.*?)/describe%s$" % (
-                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+            re_path(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/describe%s$"
+                % (
+                    self._meta.resource_name,
+                    self._meta.detail_uri_name,
+                    trailing_slash(),
                 ),
-                self.wrap_view('describe'), name='temporary_file_describe'
+                self.wrap_view("describe"),
+                name="temporary_file_describe",
             ),
-            url(
-                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/deploy%s$" % (
-                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+            re_path(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/deploy%s$"
+                % (
+                    self._meta.resource_name,
+                    self._meta.detail_uri_name,
+                    trailing_slash(),
                 ),
-                self.wrap_view('deploy'), name='temporary_file_deploy'
+                self.wrap_view("deploy"),
+                name="temporary_file_deploy",
             ),
-            url(
-                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/append%s$" % (
-                    self._meta.resource_name, self._meta.detail_uri_name, trailing_slash()
+            re_path(
+                r"^(?P<resource_name>%s)/(?P<%s>.*?)/(?P<dataset_id>[\w\-@\._]+)/append%s$"
+                % (
+                    self._meta.resource_name,
+                    self._meta.detail_uri_name,
+                    trailing_slash(),
                 ),
-                self.wrap_view('append'), name='temporary_file_append'
-            )
+                self.wrap_view("append"),
+                name="temporary_file_append",
+            ),
         ]
 
     def populate_point_data(self, dataset_id, csv_info):

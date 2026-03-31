@@ -16,7 +16,7 @@ INSTALLED_APPS = (
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
-    'django_nose',
+    "tastypie",
     'tastypie',
     'tablo',
 )
@@ -33,5 +33,3 @@ MIDDLEWARE = (
 
 ROOT_URLCONF = 'tablo.urls'
 
-TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
-NOSE_ARGS = ('--nocapture', '--verbosity=3', '--rednose')
