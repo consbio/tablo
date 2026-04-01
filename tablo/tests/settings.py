@@ -4,6 +4,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
         'NAME': 'tablo',
+        'HOST': 'localhost',
+        'USER': 'tablo',
+        'PASSWORD': 'tablo'
     }
 }
 USE_TZ = False
