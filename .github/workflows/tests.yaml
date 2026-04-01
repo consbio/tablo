@@ -1,0 +1,40 @@
+name: Tests
+
+on:
+  push:
+    branches: ['main', 'update-deps']
+  pull_request:
+    branches: ['main']
+
+jobs:
+  Test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgis:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_PASSWORD: tablo
+          POSTGRES_USER: tablo
+          POSTGRES_DB: tablo
+        ports:
+          - '5432:5432'
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y gdal-bin libgdal-dev libgeos-dev libproj-dev build-essential zlib1g-dev git curl jq
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Set up UV
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Sync
+        run: uv sync
+      - name: Run Tests
+        run: uv run pytest
