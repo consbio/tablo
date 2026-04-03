@@ -4,6 +4,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.contrib.gis.db.backends.postgis',
         'NAME': 'tablo',
+        'HOST': 'localhost',
+        'USER': 'tablo',
+        'PASSWORD': 'tablo'
     }
 }
 USE_TZ = False
@@ -16,7 +19,6 @@ INSTALLED_APPS = (
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
-    'django_nose',
     'tastypie',
     'tablo',
 )
@@ -33,5 +35,3 @@ MIDDLEWARE = (
 
 ROOT_URLCONF = 'tablo.urls'
 
-TEST_RUNNER = 'django_nose.NoseTestSuiteRunner'
-NOSE_ARGS = ('--nocapture', '--verbosity=3', '--rednose')
