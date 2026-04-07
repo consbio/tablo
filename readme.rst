@@ -1,4 +1,4 @@
-Tablo 3.0
+Tablo 3.1
 ===========
 
 .. image:: https://travis-ci.org/consbio/tablo.svg?branch=main

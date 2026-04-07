@@ -1,11 +1,11 @@
 [project]
 name = "tablo"
-version = "3.0.0"
+version = "3.1.0"
 description = "A PostGIS table to feature service app for Django"
 readme = "readme.rst"
-requires-python = "==3.11.*"
+requires-python = ">=3.11,<3.12"
 dependencies = [
-  "Django==4.2.*",  
+  "django (==5.2.*)",
   "sqlparse>=0.3.1",
   "pyproj<3.7",
   "numpy>=2.4.4, <3.0",
@@ -13,7 +13,7 @@ dependencies = [
   "pandas==3.*",
   "django-tastypie==0.15.*",
   "psycopg2-binary",
-  "Pillow==7.1.2",
+  "pillow (>=9.0.1,<10.0)",
   "django-storages==1.14.*",
   "boto3==1.14.*",
   "sqlalchemy==1.3.*",
@@ -25,7 +25,4 @@ pythonpath = ["."]
 DJANGO_SETTINGS_MODULE = "tablo.tests.settings"
 
 [dependency-groups]
-dev = [
-    "pytest>=9.0.2",
-    "pytest-django>=4.12.0",
-]
+dev = ["pytest>=9.0.2", "pytest-django>=4.12.0"]
