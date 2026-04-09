@@ -362,7 +362,7 @@ wheels = [
 
 [[package]]
 name = "tablo"
-version = "3.1.0"
+version = "3.1.1"
 source = { virtual = "." }
 dependencies = [
     { name = "boto3" },
