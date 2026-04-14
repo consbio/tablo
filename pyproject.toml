@@ -25,4 +25,4 @@ pythonpath = ["."]
 DJANGO_SETTINGS_MODULE = "tablo.tests.settings"
 
 [dependency-groups]
-dev = ["pytest>=9.0.2", "pytest-django>=4.12.0"]
+dev = ["pytest>=9.0.3", "pytest-django>=4.12.0"]
