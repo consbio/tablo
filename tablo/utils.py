@@ -20,7 +20,12 @@ def get_sqlalchemy_engine():
         db_auth = ''
     db_host = settings['HOST']
     db_name = settings['NAME']
-    return create_engine('postgresql://{auth}{host}/{name}'.format(auth=db_auth, host=db_host, name=db_name))
+    db_port = settings.get("PORT", "5432")
+    return create_engine(
+        "postgresql://{auth}{host}:{port}/{name}".format(
+            auth=db_auth, host=db_host, name=db_name, port=db_port
+        )
+    )
 
 
 def dictfetchall(cursor):
