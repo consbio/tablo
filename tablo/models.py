@@ -3,6 +3,7 @@ import calendar
 import json
 import logging
 import re
+from sqlalchemy import text
 import sqlparse
 import uuid
 
@@ -1055,22 +1056,28 @@ def create_aggregate_database_table(row, dataset_id):
         seq_check_query = "SELECT sequence_name FROM information_schema.sequences WHERE sequence_name = '{}'".format(
             sequence_name
         )
-        if not conn.execute(seq_check_query).fetchone():
+        if not conn.execute(text(seq_check_query)).fetchone():
             conn.execute(
-                'CREATE SEQUENCE {sequence} OWNED BY {table_name}.{pk}'.format(
-                    sequence=sequence_name,
-                    table_name=table_name,
-                    pk=PRIMARY_KEY_NAME
+                text(
+                    "CREATE SEQUENCE {sequence} OWNED BY {table_name}.{pk}".format(
+                        sequence=sequence_name,
+                        table_name=table_name,
+                        pk=PRIMARY_KEY_NAME,
+                    )
                 )
             )
         conn.execute(
-            'ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint'.format(
-                table=table_name, key=PRIMARY_KEY_NAME
+            text(
+                "ALTER TABLE {table} ALTER COLUMN {key} TYPE bigint USING {key}::bigint".format(
+                    table=table_name, key=PRIMARY_KEY_NAME
+                )
             )
         )
         conn.execute(
-            'ALTER TABLE {table} ALTER COLUMN {key} SET DEFAULT nextval(\'{sequence}\')'.format(
-                table=table_name, key=PRIMARY_KEY_NAME, sequence=sequence_name
+            text(
+                "ALTER TABLE {table} ALTER COLUMN {key} SET DEFAULT nextval('{sequence}')".format(
+                    table=table_name, key=PRIMARY_KEY_NAME, sequence=sequence_name
+                )
             )
         )
     return table_name
@@ -1113,7 +1120,7 @@ def create_database_table(row_set, csv_info, dataset_id, append=False, additiona
             if c not in csv_info['optionalFields']:
                 constraints_query.append('ALTER COLUMN {} SET NOT NULL'.format(c))
         constraints_query = 'ALTER TABLE {} {}'.format(table_name, ','.join(constraints_query))
-        conn.execute(constraints_query)
+        conn.execute(text(constraints_query))
 
     return table_name
 
