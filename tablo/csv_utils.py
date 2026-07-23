@@ -85,7 +85,7 @@ def prepare_csv_rows(csv_file, csv_info=None):
     if csv_info:
         date_fields = get_date_fields(csv_info)
         for field in date_fields:
-            row_set[field] = row_set[field].astype('datetime64')
+            row_set[field] = row_set[field].astype('datetime64[ns]')
 
     row_set.index += 1
     data_types = infer_data_types(row_set)
