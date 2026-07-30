@@ -49,28 +49,28 @@ class FeatureService(models.Model):
 
     @property
     def initial_extent(self):
-        if self._initial_extent is None and self.featureservicelayer_set.all():
-            self._initial_extent = json.dumps(determine_extent(self.featureservicelayer_set.all()[0].table))
+        if self._initial_extent is None and self.layers.all():
+            self._initial_extent = json.dumps(determine_extent(self.layers.all()[0].table))
             self.save()
         return self._initial_extent
 
     @property
     def full_extent(self):
-        if self._full_extent is None and self.featureservicelayer_set.all():
-            self._full_extent = json.dumps(determine_extent(self.featureservicelayer_set.all()[0].table))
+        if self._full_extent is None and self.layers.all():
+            self._full_extent = json.dumps(determine_extent(self.layers.all()[0].table))
             self.save()
         return self._full_extent
 
     @property
     def dataset_id(self):
-        if self.featureservicelayer_set.all():
-            dataset_id = self.featureservicelayer_set.all()[0].table
+        if self.layers.all():
+            dataset_id = self.layers.all()[0].table
             return dataset_id.replace(TABLE_NAME_PREFIX, '').replace(IMPORT_SUFFIX, '')
         return 0
 
     def finalize(self, dataset_id):
         # Renames the table associated with the feature service to remove the IMPORT tag
-        fs_layer = self.featureservicelayer_set.first()
+        fs_layer = self.layers.first()
         fs_layer.table = TABLE_NAME_PREFIX + dataset_id
         fs_layer.save()
 
@@ -114,7 +114,7 @@ class FeatureService(models.Model):
 
 class FeatureServiceLayer(models.Model):
     id = models.AutoField(auto_created=True, primary_key=True)
-    service = models.ForeignKey(FeatureService, on_delete=models.CASCADE)
+    service = models.ForeignKey(FeatureService, on_delete=models.CASCADE, related_name='layers')
     layer_order = models.IntegerField()
     table = models.CharField(max_length=255)
     name = models.CharField(max_length=255, null=True)

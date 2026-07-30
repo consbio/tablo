@@ -91,7 +91,7 @@ class FeatureServiceResource(TabloModelResource):
 
     layers = fields.ToManyField(
         'tablo.api.FeatureServiceLayerResource',
-        attribute='featureservicelayer_set',
+        attribute='layers',
         related_name='service',
         full=True,
         full_list=False
@@ -170,7 +170,7 @@ class FeatureServiceResource(TabloModelResource):
 
         table_name = copy_data_table_for_import(service.dataset_id)
 
-        old_layers = service.featureservicelayer_set.all()
+        old_layers = service.layers.all()
 
         service.id = None
         service._initial_extent = None
@@ -209,7 +209,7 @@ class FeatureServiceResource(TabloModelResource):
 
         service._full_extent = None
         service._initial_extent = None
-        service.featureservicelayer_set.first()._extent = None
+        service.layers.first()._extent = None
         service.save()
 
         return self.create_response(request, {'table_name': table_name})
@@ -228,7 +228,7 @@ class FeatureServiceResource(TabloModelResource):
         deletes = str(delete_list).split(',') if delete_list else []
 
         add_response_obj = []
-        feature_service_layer = service.featureservicelayer_set.first()
+        feature_service_layer = service.layers.first()
         original_time_extent = (
             feature_service_layer.get_raw_time_extent() if feature_service_layer.supports_time else None
         )

@@ -75,7 +75,7 @@ class FeatureServiceDetailView(DetailView):
             'layers': []
         }
 
-        for layer in self.object.featureservicelayer_set.all():
+        for layer in self.object.layers.all():
             data['layers'].append({
                 'id': layer.layer_order,
                 'name': layer.name,
