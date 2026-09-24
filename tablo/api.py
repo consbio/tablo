@@ -186,9 +186,14 @@ class FeatureServiceResource(TabloModelResource):
             layer.table = table_name
             layer.save()
 
+        time_extent = None
+
+        if len(old_layers):
+            time_extent = layer.time_extent
+
         return self.create_response(request, {
             'service_id': service.id,
-            'time_extent': layer.time_extent
+            'time_extent': time_extent
         })
 
     def combine_tables(self, request, **kwargs):
